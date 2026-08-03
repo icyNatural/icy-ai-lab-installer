@@ -30,6 +30,25 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 
 ---
 
+## Robust Windows System Features
+
+### 1. UAC Self-Elevation & Process Protection
+- If invoked from a non-elevated prompt, `Install-AI-Lab.ps1` self-elevates via `Start-Process powershell.exe -Verb RunAs`.
+- Quotes all executable and script paths safely (handling spaces, parentheses, and special characters).
+- Displays `"Administrator privileges acquired. Continuing installation."` in the elevated prompt.
+- Includes a global system mutex (`Global\IcyAILabInstallerMutex`) to prevent duplicate concurrent installer runs.
+
+### 2. WSL 2 Reboot & Auto-Resume Flow
+If WSL 2 optional features (`Microsoft-Windows-Subsystem-Linux` or `VirtualMachinePlatform`) require a system restart:
+- **Immediate Work Stop**: All dependent installation steps (Docker, Ollama, model downloads, container creation) stop immediately.
+- **RunOnce Registration**: Saves resume state to `%TEMP%\ai_lab_install_state.json` and registers `HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce` with the full absolute script path.
+- **Reboot Acceptance**: If the user accepts reboot (`Y`), the system restarts immediately and automatically resumes upon user sign-in displaying `"Resuming Icy AI Lab installation after reboot."`
+- **Reboot Decline**: If the user declines reboot (`N`), the installer exits cleanly with code `10` showing:
+  `"Restart Windows, then sign back in. Installation will resume automatically."`
+- **Loop & Stale File Safeguards**: Automatically clears the `RunOnce` key on resume to prevent infinite loops, limits resume attempts to 2, and validates the presence of the source script file.
+
+---
+
 ## Prerequisites
 
 - **Operating System**: Windows 10 (Build 19041+) or Windows 11 (64-bit AMD64/ARM64).
@@ -44,25 +63,13 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 ## Quick Start Installation
 
 1. Download and extract the latest release ZIP.
-2. Open PowerShell as administrator or normal user (the script auto-elevates via UAC).
-3. Execute the bootstrapper:
+2. Open PowerShell and run:
 
 ```powershell
 .\Install-AI-Lab.ps1
 ```
 
-*Note: You do not need to change your global PowerShell ExecutionPolicy. Run single commands with `-ExecutionPolicy Bypass` if prompted.*
-
----
-
-## Reboot & Auto-Resume Mechanism
-
-If WSL 2 features (`Microsoft-Windows-Subsystem-Linux` or `VirtualMachinePlatform`) were not previously enabled:
-1. The installer enables the required Windows optional features via DISM.
-2. It registers a temporary per-user `RunOnce` registry key (`HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce`) and saves installer state to `%TEMP%\ai_lab_install_state.json`.
-3. You will be prompted to restart your computer.
-4. Upon logging back into Windows, the installer **automatically resumes** from where it left off.
-5. The state file and registry key are automatically cleaned up upon completion, with built-in safeguards to prevent infinite reboot loops.
+*Note: You do not need to change your global PowerShell ExecutionPolicy. Scripts execute with process-scoped `-ExecutionPolicy Bypass`.*
 
 ---
 

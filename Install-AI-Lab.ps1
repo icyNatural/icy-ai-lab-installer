@@ -28,6 +28,29 @@ $script:EXIT_FAILURE          = 1
 
 $global:HasWarnings = $false
 
+# Single-Instance Mutex Enforcement
+$script:InstallerMutex = $null
+$createdNew = $false
+try {
+    $script:InstallerMutex = New-Object System.Threading.Mutex($true, "Global\IcyAILabInstallerMutex", [ref]$createdNew)
+} catch {
+    $createdNew = $true
+}
+
+if (-not $createdNew) {
+    Write-Host "ERROR: Another instance of Icy AI Lab Installer is already running." -ForegroundColor Red
+    exit $script:EXIT_FAILURE
+}
+
+# Resolve Full Absolute Script Path
+$resolvedScriptPath = $MyInvocation.MyCommand.Path
+if ([string]::IsNullOrWhiteSpace($resolvedScriptPath) -or -not (Test-Path -Path $resolvedScriptPath)) {
+    $resolvedScriptPath = $PSCommandPath
+}
+if ($resolvedScriptPath -and (Test-Path -Path $resolvedScriptPath)) {
+    $resolvedScriptPath = (Get-Item -Path $resolvedScriptPath).FullName
+}
+
 # Helper: Check UAC Elevation
 function Test-IsAdmin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -38,23 +61,42 @@ function Test-IsAdmin {
 # Self-Elevate if not Administrator
 if (-not (Test-IsAdmin)) {
     Write-Host "Elevating privileges to Administrator..." -ForegroundColor Yellow
-    $scriptPath = $MyInvocation.MyCommand.Definition
-    $argList = "-ExecutionPolicy Bypass -File `"$scriptPath`" -InstallRoot `"$InstallRoot`""
+
+    if ([string]::IsNullOrWhiteSpace($resolvedScriptPath) -or -not (Test-Path -Path $resolvedScriptPath)) {
+        Write-Host "ERROR: Could not resolve full absolute script path for elevation." -ForegroundColor Red
+        exit $script:EXIT_FAILURE
+    }
+
+    # Build escaped argument string preserving paths with spaces or parentheses
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$resolvedScriptPath`" -InstallRoot `"$InstallRoot`""
     if ($SkipReboot)        { $argList += " -SkipReboot" }
     if ($SkipModels)        { $argList += " -SkipModels" }
     if ($NonInteractive)     { $argList += " -NonInteractive" }
     if ($ResumedFromReboot)  { $argList += " -ResumedFromReboot" }
     if ($Force)              { $argList += " -Force" }
 
+    # Release mutex so elevated child process can acquire it
+    if ($script:InstallerMutex) {
+        try { $script:InstallerMutex.ReleaseMutex(); $script:InstallerMutex.Dispose() } catch { }
+    }
+
     try {
-        $process = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -Verb RunAs -PassThru -Wait
-        exit $process.ExitCode
+        $process = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -Verb RunAs -PassThru
+        if ($process) {
+            Write-Host "Elevated process successfully launched (PID: $($process.Id)). Exiting parent process." -ForegroundColor Green
+            exit $script:EXIT_SUCCESS
+        } else {
+            throw "Start-Process returned null process object."
+        }
     }
     catch {
-        Write-Host "ERROR: Administrator elevation was denied or failed." -ForegroundColor Red
+        Write-Host "ERROR: Administrator elevation was denied or failed: $_" -ForegroundColor Red
         exit $script:EXIT_FAILURE
     }
 }
+
+# In Elevated Process: Display confirmation message
+Write-Host "Administrator privileges acquired. Continuing installation." -ForegroundColor Green
 
 # Ensure Folders and Logging Initialization
 if (-not (Test-Path -Path $InstallRoot)) {
@@ -96,6 +138,7 @@ function Write-Log([string]$Message, [string]$Level = "INFO") {
 Write-Log "Icy AI Lab Windows Bootstrapper Started" "SECTION"
 Write-Log "Target Install Root: '$InstallRoot'"
 Write-Log "Log File Location:   '$LogFile'"
+Write-Log "Resolved Script:     '$resolvedScriptPath'"
 
 # System & Hardware Diagnostics
 Write-Log "Performing Hardware and Environment Diagnostics..." "SECTION"
@@ -178,9 +221,32 @@ if ($state -and $state.resumeCount) {
     $resumeCount = [int]$state.resumeCount
 }
 
-if ($resumeCount -ge 2) {
-    Write-Log "Maximum auto-resume limit reached ($resumeCount). Clearing RunOnce state to prevent infinite reboot loop." "WARN"
-    Cleanup-ResumeState
+# Handle Post-Reboot Resume Initialization
+if ($ResumedFromReboot -or $state) {
+    # Remove RunOnce registry entry immediately to prevent infinite reboot loops
+    Remove-ItemProperty -Path $RunOnceKey -Name $RunOnceValue -ErrorAction SilentlyContinue
+    Write-Log "RunOnce key removed to prevent duplicate auto-resume loops."
+
+    if ($resumeCount -ge 2) {
+        Write-Log "Maximum auto-resume limit reached ($resumeCount). Clearing state." "WARN"
+        Cleanup-ResumeState
+        $manualCmd = "powershell.exe -ExecutionPolicy Bypass -File `"$resolvedScriptPath`" -InstallRoot `"$InstallRoot`""
+        Write-Log "To resume manually, execute: $manualCmd" "WARN"
+        exit $script:EXIT_FAILURE
+    }
+
+    # Validate source script exists at resume time
+    $savedScriptPath = if ($state -and $state.ScriptPath) { $state.ScriptPath } else { $resolvedScriptPath }
+    if (-not (Test-Path -Path $savedScriptPath)) {
+        Write-Log "ERROR: Source installer script no longer exists at '$savedScriptPath'." "ERROR"
+        $manualCmd = "powershell.exe -ExecutionPolicy Bypass -File `"<path_to_Install-AI-Lab.ps1>`" -InstallRoot `"$InstallRoot`""
+        Write-Log "Please locate Install-AI-Lab.ps1 and run manually: $manualCmd" "ERROR"
+        Cleanup-ResumeState
+        exit $script:EXIT_FAILURE
+    }
+
+    Write-Host "Resuming Icy AI Lab installation after reboot." -ForegroundColor Green
+    Write-Log "Resuming Icy AI Lab installation after reboot (Resume Count: $resumeCount)." "SUCCESS"
 }
 
 # WSL 2 Diagnostics & Enablement
@@ -217,30 +283,54 @@ $cbsReboot = Test-Path -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Co
 if ($rebootNeeded -or $cbsReboot -or $pendingRename) {
     Write-Log "A Windows restart is required to finalize WSL 2 feature installation." "WARN"
 
-    if (-not $SkipReboot) {
-        $newResumeCount = $resumeCount + 1
-        Save-InstallState -StateData @{
-            resumeCount = $newResumeCount
-            InstallRoot = $InstallRoot
-            Timestamp   = (Get-Date).ToString("o")
+    if (-not (Test-Path -Path $resolvedScriptPath)) {
+        Write-Log "ERROR: Cannot register auto-resume because installer script is missing at '$resolvedScriptPath'." "ERROR"
+        exit $script:EXIT_FAILURE
+    }
+
+    # Save resume state before prompting
+    $newResumeCount = $resumeCount + 1
+    Save-InstallState -StateData @{
+        resumeCount = $newResumeCount
+        InstallRoot = $InstallRoot
+        ScriptPath  = $resolvedScriptPath
+        Phase       = "WSL_ENABLED"
+        Timestamp   = (Get-Date).ToString("o")
+    }
+
+    # Register RunOnce using full absolute script path with safe quotes
+    $resumeCmd = "powershell.exe -ExecutionPolicy Bypass -File `"$resolvedScriptPath`" -ResumedFromReboot -InstallRoot `"$InstallRoot`""
+    if ($SkipModels)     { $resumeCmd += " -SkipModels" }
+    if ($NonInteractive) { $resumeCmd += " -NonInteractive" }
+    if ($Force)          { $resumeCmd += " -Force" }
+
+    Set-ItemProperty -Path $RunOnceKey -Name $RunOnceValue -Value $resumeCmd -Force
+    Write-Log "Registered auto-resume RunOnce key: $RunOnceValue" "SUCCESS"
+
+    if (-not $NonInteractive) {
+        $resp = Read-Host "Would you like to restart your computer now? [Y/n]"
+        if ($resp -notmatch '^[Nn]') {
+            Write-Log "Initiating immediate system restart..." "SUCCESS"
+            Restart-Computer -Force
+            exit $script:EXIT_REBOOT_REQUIRED
+        } else {
+            Write-Host "Restart Windows, then sign back in. Installation will resume automatically." -ForegroundColor Yellow
+            Write-Log "Restart Windows, then sign back in. Installation will resume automatically." "WARN"
+            # STOP ALL DEPENDENT INSTALLATION WORK IMMEDIATELY
+            exit $script:EXIT_REBOOT_REQUIRED
         }
-
-        # Set per-user RunOnce resume key
-        $scriptPath = $MyInvocation.MyCommand.Definition
-        $resumeCmd = "powershell.exe -ExecutionPolicy Bypass -File `"$scriptPath`" -ResumedFromReboot -InstallRoot `"$InstallRoot`""
-        Set-ItemProperty -Path $RunOnceKey -Name $RunOnceValue -Value $resumeCmd -Force
-        Write-Log "Registered auto-resume RunOnce key: $RunOnceValue" "SUCCESS"
-
-        if (-not $NonInteractive) {
-            $resp = Read-Host "Would you like to restart your computer now? [Y/n]"
-            if ($resp -notmatch '^[Nn]') {
-                Write-Log "Initiating system restart..."
-                Restart-Computer -Force
-                exit $script:EXIT_REBOOT_REQUIRED
-            }
+    } else {
+        if (-not $SkipReboot) {
+            Write-Log "Non-interactive mode: initiating system restart..." "SUCCESS"
+            Restart-Computer -Force
+            exit $script:EXIT_REBOOT_REQUIRED
+        } else {
+            Write-Host "Restart Windows, then sign back in. Installation will resume automatically." -ForegroundColor Yellow
+            Write-Log "Restart Windows, then sign back in. Installation will resume automatically." "WARN"
+            # STOP ALL DEPENDENT INSTALLATION WORK IMMEDIATELY
+            exit $script:EXIT_REBOOT_REQUIRED
         }
     }
-    Write-Log "Continuing installation without immediate reboot. Note that Docker/WSL may require restart before functioning." "WARN"
 } else {
     Cleanup-ResumeState
 }

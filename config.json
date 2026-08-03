@@ -2,8 +2,23 @@
   "installFolderName": "AI-Lab",
   "timezone": "America/New_York",
   "modelPacks": {
-    "light": ["qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text"],
-    "balanced": ["qwen3.5:4b", "deepseek-r1:8b", "gemma3:4b", "qwen2.5-coder:7b", "llama3.2:3b", "nomic-embed-text"],
-    "coding": ["qwen3.5:4b", "qwen2.5-coder:7b", "deepseek-r1:8b", "nomic-embed-text"]
+    "light": {
+      "name": "Starter Light Pack (<12 GB RAM)",
+      "minRamGB": 8,
+      "estimatedDiskGB": 8.5,
+      "models": ["qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text"]
+    },
+    "balanced": {
+      "name": "Balanced Pack (12-23 GB RAM)",
+      "minRamGB": 12,
+      "estimatedDiskGB": 14.0,
+      "models": ["qwen3.5:4b", "deepseek-r1:8b", "gemma3:4b", "qwen2.5-coder:7b", "llama3.2:3b", "nomic-embed-text"]
+    },
+    "coding": {
+      "name": "Developer & Coding Pack (>=16 GB RAM)",
+      "minRamGB": 16,
+      "estimatedDiskGB": 12.5,
+      "models": ["qwen3.5:4b", "qwen2.5-coder:7b", "deepseek-r1:8b", "nomic-embed-text"]
+    }
   }
 }

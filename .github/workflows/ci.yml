@@ -1,0 +1,45 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: PowerShell Static Analysis (PSScriptAnalyzer)
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path . -Settings .\PSScriptAnalyzerSettings.psd1 -Recurse
+          if ($results) {
+              $results | Format-Table -AutoSize
+              $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+              if ($errors) {
+                  Write-Error "PSScriptAnalyzer found errors."
+                  exit 1
+              }
+          }
+          Write-Host "PowerShell analysis passed cleanly."
+
+      - name: JSON Syntax Validation
+        shell: powershell
+        run: |
+          $jsonFiles = Get-ChildItem -Path . -Filter "*.json" -Recurse
+          foreach ($file in $jsonFiles) {
+              Write-Host "Validating JSON syntax: $($file.FullName)"
+              $content = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json
+          }
+          Write-Host "All JSON files are syntactically valid."
+
+      - name: Docker Compose Validation
+        shell: powershell
+        run: |
+          docker compose -f docker/compose.yml config
+          Write-Host "Docker compose validation passed."

@@ -1,0 +1,38 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Release ZIP Package
+        shell: powershell
+        run: |
+          $staging = Join-Path $env:TEMP "release_staging"
+          if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+
+          # Exclude logs, local state, backups, git metadata, and temp files
+          $exclude = @(".git", ".github", "logs", "backups", "*.log", "status_report.json", "ai_lab_install_state.json")
+          
+          Get-ChildItem -Path . | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination $staging -Recurse -Force
+          }
+
+          $zipPath = "icy-ai-lab-installer-$($env:GITHUB_REF_NAME).zip"
+          Compress-Archive -Path "$staging\*" -DestinationPath $zipPath -Force
+          Write-Host "Release archive created: $zipPath"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: icy-ai-lab-installer-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

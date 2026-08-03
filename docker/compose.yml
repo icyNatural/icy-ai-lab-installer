@@ -1,30 +1,30 @@
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: icy-open-webui
+    container_name: open-webui
     restart: unless-stopped
     ports:
-      - "3000:8080"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      - "127.0.0.1:3000:8080"
     volumes:
       - open-webui-data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   n8n:
     image: docker.n8n.io/n8nio/n8n
-    container_name: icy-n8n
+    container_name: n8n
     restart: unless-stopped
     ports:
-      - "5678:5678"
-    environment:
-      TZ: "America/New_York"
-      GENERIC_TIMEZONE: "America/New_York"
-      N8N_SECURE_COOKIE: "false"
+      - "127.0.0.1:5678:5678"
     volumes:
       - n8n-data:/home/node/.n8n
       - ../workflows:/files
+    environment:
+      - GENERIC_TIMEZONE=America/New_York
+      - TZ=America/New_York
+      - N8N_SECURE_COOKIE=false
 
 volumes:
   open-webui-data:

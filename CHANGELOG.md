@@ -2,23 +2,22 @@
 
 All notable changes to the **Icy AI Lab Installer** project will be documented in this file.
 
+## [2.1.0] - 2.1.0 End-to-End Resilience & State Machine Overhaul
+
+### Added
+- **Top-Level Launcher (`START-HERE.cmd` & `START-HERE.ps1`)**: Enables one-click launch from Windows Explorer without manual PowerShell execution policy commands.
+- **Durable Installer Staging Directory (`%LOCALAPPDATA%\IcyAILab\InstallerSource`)**: Automatically copies installer source files before reboot, insulating RunOnce execution from moved or deleted Downloads folders.
+- **Phase-Based State Machine (`%LOCALAPPDATA%\IcyAILab\installer-state.json`)**: Tracks 10 distinct setup phases (`Preflight`, `EnableWindowsFeatures`, `AwaitingReboot`, `VerifyWSL`, `InstallApplications`, `StartDocker`, `StartServices`, `PullModels`, `CreateShortcuts`, `Complete`).
+- **9-Stage UX Progress Display**: Clear stage progress banners (`[1/9]` to `[9/9]`) and exit status banners.
+- **Automated Pester Test Suite (`tests/Installer.Tests.ps1`)**: Unit and integration tests covering path quoting, state serialization, reboot thresholds, RAM pack recommendations, and localhost Docker spec bindings.
+- **Desktop Recovery Shortcut**: Generates `Resume AI Lab Setup.lnk` on desktop if post-reboot auto-resume requires manual retry.
+
+### Fixed
+- **WSL Reboot Loop Issue**: Verified feature enablement before prompting reboot; cleared RunOnce registry entries on resume; added 2-reboot safeguard limit.
+- **UAC Elevation Window Retention**: Added `-NoExit` and `-WorkingDirectory "$scriptWorkingDir"` to ensure elevated windows stay open and preserve working directory context.
+- **Path Quoting**: Escaped paths containing spaces, apostrophes, ampersands, and parentheses across UAC elevation and RunOnce keys.
+
 ## [2.0.0] - 2.0.0 Architecture Overhaul
 
 ### Added
-- **UAC Self-Elevation**: Automatic administrative privilege escalation for DISM and WSL 2 configuration.
-- **WSL 2 Reboot-Resume Engine**: Automatic `RunOnce` registry state persistence and recovery after system restarts with loop prevention safeguard.
-- **Hardware Diagnostics**: CPU, core counts, RAM, GPU adapter list (noting 4GB WMI VRAM caps), and drive space detection.
-- **Full Management Suite**:
-  - `Backup-AI-Lab.ps1`: Non-destructive backup of user data and Docker volumes.
-  - `Restore-AI-Lab.ps1`: Validated restore engine with safety backups before overwriting.
-  - `Repair-AI-Lab.ps1`: Non-destructive system PATH, WSL, Docker, and Ollama repair utility.
-  - `Manage-Models.ps1`: Interactive CLI for listing, pulling, and switching Ollama model packs.
-- **Localhost Binding Security**: Bound Open WebUI (`3000`) and n8n (`5678`) to `127.0.0.1` explicitly.
-- **Machine-Readable Status Report**: Automated `$InstallRoot\status_report.json` and timestamped file logging.
-- **Desktop Shortcuts**: Automatic `.lnk` generation for starting, stopping, and opening web interfaces.
-- **CI/CD Pipeline**: GitHub Actions for PSScriptAnalyzer, JSON validation, Docker Compose syntax checks, and release packaging.
-
-### Fixed
-- Fixed hardcoded paths and usernames across all scripts.
-- Fixed global execution policy modification risks by running with `-ExecutionPolicy Bypass` scoped to script invocation.
-- Fixed volume deletion risks during update and repair operations.
+- UAC self-elevation, WSL 2 reboot-resume, management scripts (`Backup`, `Restore`, `Repair`, `Manage-Models`), status report JSON, and CI workflows.

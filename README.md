@@ -1,12 +1,20 @@
-# Icy AI Lab Installer
+# Icy AI Lab Installer (v2.1.0)
 
 Production-quality portable Windows bootstrapper and management suite for a local AI workstation.
 
 ---
 
-## Overview & Architecture
+## Quick Start (One-Click Setup)
 
-**Icy AI Lab** turns any Windows 10/11 machine into a local AI workspace:
+1. Download and extract the latest release ZIP.
+2. **Double-click `START-HERE.cmd`** in the extracted folder.
+3. Click **Yes** on the Windows UAC prompt.
+
+*No manual PowerShell execution policy commands required.*
+
+---
+
+## Overview & Architecture
 
 ```text
 +-----------------------------------------------------------------------+
@@ -26,26 +34,39 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 
 - **Host Ollama**: Native Windows inference engine with GPU/CPU acceleration.
 - **Docker Compose Services**: Open WebUI (`http://localhost:3000`) and n8n (`http://localhost:5678`), bound strictly to `127.0.0.1` for local-only security.
-- **Persistent Data**: Local workspace defaults to `%USERPROFILE%\AI-Lab` (never hardcodes usernames). Container data is stored in named Docker volumes (`open-webui-data`, `n8n-data`).
+- **Persistent Data**: Local workspace defaults to `%USERPROFILE%\AI-Lab`. Container data is stored in named Docker volumes (`open-webui-data`, `n8n-data`).
 
 ---
 
-## Robust Windows System Features
+## Robust Systems Engineering Features (v2.1.0)
 
-### 1. UAC Self-Elevation & Process Protection
-- If invoked from a non-elevated prompt, `Install-AI-Lab.ps1` self-elevates via `Start-Process powershell.exe -Verb RunAs`.
-- Quotes all executable and script paths safely (handling spaces, parentheses, and special characters).
-- Displays `"Administrator privileges acquired. Continuing installation."` in the elevated prompt.
-- Includes a global system mutex (`Global\IcyAILabInstallerMutex`) to prevent duplicate concurrent installer runs.
+### 1. Phase-Based State Machine
+The installer tracks progress across 10 durable execution phases saved in `%LOCALAPPDATA%\IcyAILab\installer-state.json`:
+- `Preflight` -> `EnableWindowsFeatures` -> `AwaitingReboot` -> `VerifyWSL` -> `InstallApplications` -> `StartDocker` -> `StartServices` -> `PullModels` -> `CreateShortcuts` -> `Complete`
 
-### 2. WSL 2 Reboot & Auto-Resume Flow
-If WSL 2 optional features (`Microsoft-Windows-Subsystem-Linux` or `VirtualMachinePlatform`) require a system restart:
-- **Immediate Work Stop**: All dependent installation steps (Docker, Ollama, model downloads, container creation) stop immediately.
-- **RunOnce Registration**: Saves resume state to `%TEMP%\ai_lab_install_state.json` and registers `HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce` with the full absolute script path.
-- **Reboot Acceptance**: If the user accepts reboot (`Y`), the system restarts immediately and automatically resumes upon user sign-in displaying `"Resuming Icy AI Lab installation after reboot."`
-- **Reboot Decline**: If the user declines reboot (`N`), the installer exits cleanly with code `10` showing:
-  `"Restart Windows, then sign back in. Installation will resume automatically."`
-- **Loop & Stale File Safeguards**: Automatically clears the `RunOnce` key on resume to prevent infinite loops, limits resume attempts to 2, and validates the presence of the source script file.
+### 2. Persistent Installer Staging Directory
+Before requesting a reboot, the installer copies runtime files (`Install-AI-Lab.ps1`, `config.json`, `docker/`, `scripts/`) to a permanent location:
+```text
+%LOCALAPPDATA%\IcyAILab\InstallerSource
+```
+`RunOnce` registry keys point to the staged copy, guaranteeing seamless auto-resume even if the Downloads directory is moved, deleted, or unmounted after reboot.
+
+### 3. Clear 9-Stage User Experience
+```text
+[1/9] System checks & hardware diagnostics
+[2/9] Preparing Windows features (WSL 2 & Virtual Machine Platform)
+[3/9] Verifying WSL 2 Engine
+[4/9] Installing applications via Winget
+[5/9] Starting Docker Desktop
+[6/9] Starting Open WebUI and n8n
+[7/9] Configuring & pulling Ollama models
+[8/9] Generating desktop shortcuts
+[9/9] Final verification & status report
+```
+
+### 4. UAC Elevation & Mutex Protection
+- Relaunches elevated process using `Start-Process powershell.exe -WorkingDirectory "$scriptWorkingDir" -ArgumentList "-NoExit ..."` so the window remains open and preserves working directory context.
+- Global mutex (`Global\IcyAILabInstallerMutex`) prevents duplicate concurrent installer runs.
 
 ---
 
@@ -54,22 +75,9 @@ If WSL 2 optional features (`Microsoft-Windows-Subsystem-Linux` or `VirtualMachi
 - **Operating System**: Windows 10 (Build 19041+) or Windows 11 (64-bit AMD64/ARM64).
 - **Virtualization**: Hardware Virtualization enabled in system BIOS.
 - **Package Manager**: Microsoft `winget` (included in Windows 10/11 App Installer).
-- **Free Disk Space**: Minimum 15 GB free disk space (more recommended for large model packs).
+- **Free Disk Space**: Minimum 15 GB free disk space.
 
 > **Docker Desktop Licensing Note**: Docker Desktop is free for personal use, education, open-source projects, and small businesses (<250 employees and <$10M annual revenue). Commercial use in larger organizations requires a paid subscription.
-
----
-
-## Quick Start Installation
-
-1. Download and extract the latest release ZIP.
-2. Open PowerShell and run:
-
-```powershell
-.\Install-AI-Lab.ps1
-```
-
-*Note: You do not need to change your global PowerShell ExecutionPolicy. Scripts execute with process-scoped `-ExecutionPolicy Bypass`.*
 
 ---
 
@@ -87,43 +95,13 @@ Model pack definitions and RAM recommendations are maintained in `config.json`:
 
 ## Management Scripts Suite (`scripts/`)
 
-- **Start Services**:
-  ```powershell
-  .\scripts\Start-AI-Lab.ps1
-  ```
-- **Stop Services**:
-  ```powershell
-  .\scripts\Stop-AI-Lab.ps1
-  ```
-- **Update Environment & Services**:
-  ```powershell
-  .\scripts\Update-AI-Lab.ps1
-  ```
-- **Backup User Data & Docker Volumes**:
-  ```powershell
-  .\scripts\Backup-AI-Lab.ps1
-  ```
-- **Restore Archive**:
-  ```powershell
-  .\scripts\Restore-AI-Lab.ps1 -BackupPath "..\backups\AI-Lab-Backup-20260803-120000.zip"
-  ```
-- **Non-Destructive System Repair**:
-  ```powershell
-  .\scripts\Repair-AI-Lab.ps1
-  ```
-- **Manage Ollama Models**:
-  ```powershell
-  .\scripts\Manage-Models.ps1 -Action list
-  .\scripts\Manage-Models.ps1 -Action pull-pack -PackOrModel balanced
-  ```
-
----
-
-## Security & Localhost Binding
-
-- Services are bound exclusively to `127.0.0.1` (localhost) to prevent unauthorized network exposure.
-- No hardcoded paths or usernames exist in any script or configuration.
-- Installation state logs and reports automatically redact sensitive tokens/secrets.
+- **Start Services**: `.\scripts\Start-AI-Lab.ps1`
+- **Stop Services**: `.\scripts\Stop-AI-Lab.ps1`
+- **Update Environment & Services**: `.\scripts\Update-AI-Lab.ps1`
+- **Backup User Data & Docker Volumes**: `.\scripts\Backup-AI-Lab.ps1`
+- **Restore Archive**: `.\scripts\Restore-AI-Lab.ps1 -BackupPath "..\backups\AI-Lab-Backup-20260803-120000.zip"`
+- **Non-Destructive System Repair**: `.\scripts\Repair-AI-Lab.ps1`
+- **Manage Ollama Models**: `.\scripts\Manage-Models.ps1 -Action list`
 
 ---
 

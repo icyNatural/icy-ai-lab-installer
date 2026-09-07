@@ -52,6 +52,30 @@ switch ($Action.ToLower()) {
             }
         }
     }
+    "profile" {
+        $profileScript = Join-Path $PSScriptRoot "Profile-AI-Lab.ps1"
+        if (Test-Path -Path $profileScript) {
+            & $profileScript -LabRoot $LabRoot
+        } else {
+            Write-Log "Profiler script missing at '$profileScript'." "ERROR"
+        }
+    }
+    "recommend" {
+        $profileScript = Join-Path $PSScriptRoot "Profile-AI-Lab.ps1"
+        if (Test-Path -Path $profileScript) {
+            & $profileScript -LabRoot $LabRoot
+        } else {
+            Write-Log "Profiler script missing at '$profileScript'." "ERROR"
+        }
+    }
+    "benchmark" {
+        $benchmarkScript = Join-Path $PSScriptRoot "Benchmark-AI-Lab.ps1"
+        if (Test-Path -Path $benchmarkScript) {
+            & $benchmarkScript -LabRoot $LabRoot -Model $PackOrModel
+        } else {
+            Write-Log "Benchmark script missing at '$benchmarkScript'." "ERROR"
+        }
+    }
     "pull-pack" {
         if (-not $PackOrModel) {
             Write-Log "Please specify a pack name (e.g. light, balanced, coding)." "ERROR"
@@ -88,6 +112,6 @@ switch ($Action.ToLower()) {
         ollama rm $PackOrModel
     }
     default {
-        Write-Log "Unknown action '$Action'. Supported actions: list, pull-pack, pull, remove" "ERROR"
+        Write-Log "Unknown action '$Action'. Supported actions: list, profile, recommend, benchmark, pull-pack, pull, remove" "ERROR"
     }
 }

@@ -5,9 +5,11 @@
 #>
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$installScript = Join-Path $repoRoot "Install-AI-Lab.ps1"
-$configFile = Join-Path $repoRoot "config.json"
-$composeFile = Join-Path $repoRoot "docker\compose.yml"
+$installScript   = Join-Path $repoRoot "Install-AI-Lab.ps1"
+$configFile      = Join-Path $repoRoot "config.json"
+$composeFile     = Join-Path $repoRoot "docker\compose.yml"
+$profileScript   = Join-Path $repoRoot "scripts\Profile-AI-Lab.ps1"
+$benchmarkScript = Join-Path $repoRoot "scripts\Benchmark-AI-Lab.ps1"
 
 Describe "Icy AI Lab Installer Core Tests" {
 
@@ -31,6 +33,14 @@ Describe "Icy AI Lab Installer Core Tests" {
 
         It "START-HERE.ps1 launcher physically exists" {
             (Test-Path -Path (Join-Path $repoRoot "START-HERE.ps1")) | Should Be $true
+        }
+
+        It "Profile-AI-Lab.ps1 profiler module physically exists" {
+            (Test-Path -Path $profileScript) | Should Be $true
+        }
+
+        It "Benchmark-AI-Lab.ps1 benchmarking module physically exists" {
+            (Test-Path -Path $benchmarkScript) | Should Be $true
         }
     }
 
@@ -119,6 +129,31 @@ Describe "Icy AI Lab Installer Core Tests" {
             $ramGB = 32
             $pack = if ($ramGB -ge 24) { "coding" } else { "balanced" }
             $pack | Should Be "coding"
+        }
+    }
+
+    Context "Profiling & Performance Calculation Logic" {
+        It "Calculates sustained tokens per second from Ollama metrics accurately" {
+            $evalCount = 45
+            $evalDurationNanoseconds = 950000000 # 0.95 seconds
+            $evalDurationSeconds = $evalDurationNanoseconds / 1e9
+            $sustainedTokSec = [math]::Round($evalCount / $evalDurationSeconds, 2)
+            $sustainedTokSec | Should Be 47.37
+        }
+
+        It "Calculates model load time in seconds accurately" {
+            $loadDurationNanoseconds = 2500000000 # 2.5 seconds
+            $loadTimeSec = [math]::Round($loadDurationNanoseconds / 1e9, 3)
+            $loadTimeSec | Should Be 2.5
+        }
+
+        It "Executes Profile-AI-Lab.ps1 with JsonOutput switch" {
+            $jsonResult = & $profileScript -JsonOutput
+            $jsonResult | Should Not BeNullOrEmpty
+            $parsedObj = $jsonResult | ConvertFrom-Json
+            $parsedObj.Hardware | Should Not BeNullOrEmpty
+            $parsedObj.Ollama | Should Not BeNullOrEmpty
+            $parsedObj.Recommendations | Should Not BeNullOrEmpty
         }
     }
 }

@@ -38,6 +38,29 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 
 ---
 
+## Hardware Profiling, Benchmarking & Model Recommendations
+
+The installer includes modular scripts to profile workstation hardware, benchmark model inference speeds, and automatically rank installed Ollama models:
+
+### 1. Workstation Hardware & Model Profiler
+Inspects CPU, System RAM, GPU/VRAM, Ollama version, and installed model roster:
+```powershell
+.\scripts\Profile-AI-Lab.ps1
+```
+Ranks installed models into three clear operational tiers:
+- ⚡ **Fastest Model**: Lowest parameter/size footprint for instant latency.
+- ⚖️ **Best Balanced Model**: Optimal speed and quality ratio for system memory.
+- 💪 **Largest Practical Model**: Maximum model size that runs safely without thrashing swap memory.
+
+### 2. Model Performance Benchmarking Utility
+Measures LLM load time, sustained tokens per second, prompt processing speed, and RAM/GPU memory residency:
+```powershell
+.\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b -Runs 3
+```
+- Benchmark results are automatically exported to `%USERPROFILE%\AI-Lab\logs\benchmark_<timestamp>.json` and `.csv`.
+
+---
+
 ## Robust Systems Engineering Features (v2.1.0)
 
 ### 1. Phase-Based State Machine
@@ -98,10 +121,12 @@ Model pack definitions and RAM recommendations are maintained in `config.json`:
 - **Start Services**: `.\scripts\Start-AI-Lab.ps1`
 - **Stop Services**: `.\scripts\Stop-AI-Lab.ps1`
 - **Update Environment & Services**: `.\scripts\Update-AI-Lab.ps1`
+- **Hardware Profile & Ranking**: `.\scripts\Profile-AI-Lab.ps1`
+- **Benchmark Model Speeds**: `.\scripts\Benchmark-AI-Lab.ps1`
 - **Backup User Data & Docker Volumes**: `.\scripts\Backup-AI-Lab.ps1`
 - **Restore Archive**: `.\scripts\Restore-AI-Lab.ps1 -BackupPath "..\backups\AI-Lab-Backup-20260803-120000.zip"`
 - **Non-Destructive System Repair**: `.\scripts\Repair-AI-Lab.ps1`
-- **Manage Ollama Models**: `.\scripts\Manage-Models.ps1 -Action list`
+- **Manage Ollama Models**: `.\scripts\Manage-Models.ps1 -Action recommend`
 
 ---
 

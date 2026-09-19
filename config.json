@@ -1,7 +1,10 @@
 {
-  "installerVersion": "2.1.0",
+  "installerVersion": "2.2.0",
   "installFolderName": "AI-Lab",
   "timezone": "America/New_York",
+  "lightweightMode": {
+    "defaultTasks": ["general", "coding", "reasoning"]
+  },
   "modelPacks": {
     "light": {
       "name": "Starter Light Pack (<12 GB RAM)",

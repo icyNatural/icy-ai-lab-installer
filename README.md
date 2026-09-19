@@ -1,4 +1,4 @@
-# Icy AI Lab Installer (v2.1.0)
+# Icy AI Lab Installer (v2.2.0)
 
 Production-quality portable Windows bootstrapper and management suite for a local AI workstation.
 
@@ -40,28 +40,76 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 
 ## Hardware Profiling, Benchmarking & Model Recommendations
 
-The installer includes modular scripts to profile workstation hardware, benchmark model inference speeds, and automatically rank installed Ollama models:
+The installer includes modular scripts to profile workstation hardware, recommend catalog models by task, and benchmark installed Ollama models:
 
 ### 1. Workstation Hardware & Model Profiler
 Inspects CPU, System RAM, GPU/VRAM, Ollama version, and installed model roster:
 ```powershell
 .\scripts\Profile-AI-Lab.ps1
+
+# Incorporate only measurements from an existing benchmark report
+.\scripts\Profile-AI-Lab.ps1 -BenchmarkReportPath "$env:USERPROFILE\AI-Lab\logs\benchmark_<timestamp>.json"
 ```
-Ranks installed models into three clear operational tiers:
-- ⚡ **Fastest Model**: Lowest parameter/size footprint for instant latency.
-- ⚖️ **Best Balanced Model**: Optimal speed and quality ratio for system memory.
-- 💪 **Largest Practical Model**: Maximum model size that runs safely without thrashing swap memory.
+The profile records measurement source and confidence, distinguishes installed from currently available RAM, and treats non-NVIDIA WMI VRAM as a low-confidence estimate. It reports fast everyday, balanced general, coding, automation/tool-use, retrieval, vision, and largest-comfortable categories. Recommendations are marked provisional until a matching task benchmark from the same CPU/RAM profile is supplied.
 
 ### 2. Model Performance Benchmarking Utility
 Measures LLM load time, sustained tokens per second, prompt processing speed, and RAM/GPU memory residency:
 ```powershell
-.\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b -Runs 3
+.\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b -Quick
+
+# Optional repeatable task/context suite
+.\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b `
+    -Tasks Conversation,Summarization,Coding,Extraction,Reasoning,ToolUse `
+    -ContextLength 2048,4096 -Runs 3
 ```
-- Benchmark results are automatically exported to `%USERPROFILE%\AI-Lab\logs\benchmark_<timestamp>.json` and `.csv`.
+- Cold runs use Ollama's non-destructive `keep_alive: 0` unload operation; warm runs follow with the model resident.
+- Task correctness is recorded separately from speed. Streaming time-to-first-token, load time, prompt speed, generation speed, RAM, Ollama GPU residency/spillover, and supported NVIDIA power telemetry are exported to JSON and per-run CSV.
+- Unsupported telemetry is marked unavailable; benchmark values are never synthesized.
 
 ---
 
-## Robust Systems Engineering Features (v2.1.0)
+## Optional Lightweight Mode
+
+Lightweight Mode performs a quick hardware/storage assessment and recommends small, explicitly tagged models by task. It is opt-in and does **not** run a benchmark or predict performance.
+
+```powershell
+# Interactive installation: choose tasks, then approve each recommended model separately.
+.\Install-AI-Lab.ps1 -LightweightMode
+
+# Unattended assessment is safe: it reports recommendations but downloads no adaptive models.
+.\Install-AI-Lab.ps1 -LightweightMode -NonInteractive
+
+# SkipModels takes precedence and skips assessment and all model downloads.
+.\Install-AI-Lab.ps1 -LightweightMode -SkipModels
+```
+
+The original `light`, `balanced`, and `coding` packs remain available with `-ModelPack`. Without Lightweight Mode, existing pack-selection behavior is unchanged.
+
+Manage the catalog and recommendations after installation:
+
+```powershell
+.\scripts\Manage-Models.ps1 -Action catalog
+.\scripts\Manage-Models.ps1 -Action assess
+.\scripts\Manage-Models.ps1 -Action recommend -PackOrModel coding
+.\scripts\Manage-Models.ps1 -Action pull -PackOrModel qwen2.5-coder:1.5b
+```
+
+`catalog`, `assess`, and `recommend` never download or remove models. `pull` accepts only an explicit catalog tag and fails closed if hardware/storage checks cannot approve it. `remove` remains a separate, explicit action; nothing auto-removes models.
+
+### Actual-hardware example
+
+A local Windows run during documentation reported an `AMD Ryzen 7 6800H with Radeon Graphics`, `15.21 GB` installed RAM (`0.75 GB` available at capture time), `Discrete` GPU mode, and `244.23 GB` free on the model volume. These are point-in-time hardware/storage telemetry values—not benchmark results. Available memory changes with workload, GPU classification can be imperfect, and a recommendation remains an estimate until the user explicitly pulls and tests a model.
+
+### Limitations
+
+- WMI GPU memory can be missing or inaccurate; NVIDIA telemetry is used when available.
+- Catalog artifact sizes and minimums are metadata, while runtime-memory placement is a conservative estimate. A pull fails closed when current available RAM cannot cover that estimate; close memory-heavy applications and assess again.
+- A recommendation does not guarantee speed, quality, context capacity, or successful execution under changing system load.
+- Assessment/module/catalog failures are non-fatal in the installer and result in no adaptive downloads.
+
+---
+
+## Robust Systems Engineering Features (v2.2.0)
 
 ### 1. Phase-Based State Machine
 The installer tracks progress across 10 durable execution phases saved in `%LOCALAPPDATA%\IcyAILab\installer-state.json`:

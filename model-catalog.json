@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "1.0",
+  "catalogVersion": "2026-09-19",
+  "description": "Small, explicitly tagged Ollama models. Artifact sizes are published on the linked Ollama pages. Minimum RAM/disk values are conservative Icy AI Lab policy estimates, not vendor requirements or measured performance.",
+  "minimumResourceBasis": "Icy AI Lab conservative estimate; validate with a benchmark on the target computer",
+  "models": [
+    {
+      "tag": "llama3.2:1b",
+      "name": "Llama 3.2 1B",
+      "tasks": ["general"],
+      "artifactSizeBytes": 1300000000,
+      "artifactSizeDisplay": "1.3GB",
+      "parameters": "1.24B",
+      "quantization": "Q8_0",
+      "license": "Llama 3.2 Community License",
+      "sourceUrl": "https://ollama.com/library/llama3.2:1b",
+      "minimum": { "ramGB": 4, "vramGB": 0, "diskGB": 1.5 },
+      "qualityTier": 1
+    },
+    {
+      "tag": "qwen2.5-coder:1.5b",
+      "name": "Qwen2.5 Coder 1.5B",
+      "tasks": ["coding"],
+      "artifactSizeBytes": 986000000,
+      "artifactSizeDisplay": "986MB",
+      "parameters": "1.54B",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://ollama.com/library/qwen2.5-coder:1.5b",
+      "minimum": { "ramGB": 4, "vramGB": 0, "diskGB": 1.2 },
+      "qualityTier": 1
+    },
+    {
+      "tag": "deepseek-r1:1.5b",
+      "name": "DeepSeek-R1 Distill Qwen 1.5B",
+      "tasks": ["reasoning"],
+      "artifactSizeBytes": 1100000000,
+      "artifactSizeDisplay": "1.1GB",
+      "parameters": "1.78B",
+      "quantization": "Q4_K_M",
+      "license": "MIT (derived Qwen model also subject to Apache-2.0)",
+      "sourceUrl": "https://ollama.com/library/deepseek-r1:1.5b",
+      "minimum": { "ramGB": 4, "vramGB": 0, "diskGB": 1.3 },
+      "qualityTier": 1
+    },
+    {
+      "tag": "gemma3:4b",
+      "name": "Gemma 3 4B",
+      "tasks": ["vision", "general"],
+      "artifactSizeBytes": 3300000000,
+      "artifactSizeDisplay": "3.3GB",
+      "parameters": "4.3B",
+      "quantization": "Q4_K_M",
+      "license": "Gemma Terms of Use",
+      "sourceUrl": "https://ollama.com/library/gemma3:4b",
+      "minimum": { "ramGB": 8, "vramGB": 0, "diskGB": 3.7 },
+      "qualityTier": 2
+    },
+    {
+      "tag": "nomic-embed-text:v1.5",
+      "name": "Nomic Embed Text v1.5",
+      "tasks": ["embedding"],
+      "artifactSizeBytes": 274000000,
+      "artifactSizeDisplay": "274MB",
+      "parameters": "137M",
+      "quantization": "F16",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://ollama.com/library/nomic-embed-text:v1.5",
+      "minimum": { "ramGB": 2, "vramGB": 0, "diskGB": 0.4 },
+      "qualityTier": 1
+    },
+    {
+      "tag": "qwen2.5:1.5b",
+      "name": "Qwen2.5 1.5B",
+      "tasks": ["tools", "general"],
+      "artifactSizeBytes": 986000000,
+      "artifactSizeDisplay": "986MB",
+      "parameters": "1.54B",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://ollama.com/library/qwen2.5:1.5b",
+      "minimum": { "ramGB": 4, "vramGB": 0, "diskGB": 1.2 },
+      "qualityTier": 1
+    }
+  ]
+}

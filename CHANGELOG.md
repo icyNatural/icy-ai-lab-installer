@@ -2,6 +2,19 @@
 
 All notable changes to the **Icy AI Lab Installer** project will be documented in this file.
 
+## [2.2.0] - Optional Adaptive Lightweight Mode
+
+### Added
+- Opt-in installer `-LightweightMode` with opportunistic quick hardware/storage assessment, task selection, and separate approval for every recommended model.
+- `Manage-Models.ps1` `catalog`, `assess`, and task-aware `recommend` actions, plus fail-closed catalog/hardware/storage checks for explicit `pull` requests.
+- Adaptive catalog/module staging and deployment, configuration defaults, compatibility tests, and a real-hardware telemetry example.
+
+### Safety and compatibility
+- `-NonInteractive -LightweightMode` is recommendation-only and never downloads adaptive models; `-SkipModels` takes precedence over all model assessment/download behavior.
+- Preserved original `light`, `balanced`, and `coding` model packs and existing `-ModelPack` selection behavior.
+- Recommendations never auto-remove models and do not claim benchmark or throughput results.
+- Preserved UAC, reboot-resume, Docker, launcher, backup, restore, and repair workflows with Windows PowerShell 5.1/Pester 3.4 compatibility.
+
 ## [2.1.0] - 2.1.0 End-to-End Resilience & Model Profiling/Benchmarking Layer
 
 ### Added

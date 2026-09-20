@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Pester Automated Test Suite for Icy AI Lab Installer (v2.2.0)
+    Pester Automated Test Suite for Icy AI Lab Installer (v2.3.0)
 #>
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -21,7 +21,7 @@ Describe "Icy AI Lab Installer Core Tests" {
         It "config.json physically exists and parses valid JSON" {
             (Test-Path -Path $configFile) | Should Be $true
             $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
-            $config.installerVersion | Should Be "2.2.0"
+            $config.installerVersion | Should Be "2.3.0"
             @($config.lightweightMode.defaultTasks).Count | Should BeGreaterThan 0
             $config.modelPacks.light | Should Not BeNullOrEmpty
             $config.modelPacks.balanced | Should Not BeNullOrEmpty
@@ -42,6 +42,14 @@ Describe "Icy AI Lab Installer Core Tests" {
 
         It "Benchmark-AI-Lab.ps1 benchmarking module physically exists" {
             (Test-Path -Path $benchmarkScript) | Should Be $true
+        }
+
+        It "ships and deploys the one-click control center without replacing START-HERE" {
+            (Test-Path -Path (Join-Path $repoRoot 'AI-LAB.cmd')) | Should Be $true
+            (Test-Path -Path (Join-Path $repoRoot 'scripts\AI-Lab-ControlCenter.ps1')) | Should Be $true
+            $raw = Get-Content -Path $installScript -Raw
+            $raw | Should Match 'AI-LAB\.cmd'
+            $raw | Should Match 'Icy AI Lab Control Center\.lnk'
         }
     }
 

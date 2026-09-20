@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Icy AI Lab Production-Quality Portable Windows Bootstrapper (v2.2.0)
+    Icy AI Lab Production-Quality Portable Windows Bootstrapper (v2.3.0)
 .DESCRIPTION
     Enterprise-grade installer and management suite for a local AI workstation.
     Automates hardware diagnostics, WSL 2 enablement with reboot-resume state machine,
@@ -29,7 +29,7 @@ if ($LightweightMode -and -not [string]::IsNullOrWhiteSpace($ModelPack)) {
 }
 
 # Global Constants & Exit Codes
-$script:INSTALLER_VERSION     = "2.2.0"
+$script:INSTALLER_VERSION     = "2.3.0"
 $script:STATE_SCHEMA_VERSION  = "1.0"
 
 $script:EXIT_SUCCESS          = 0
@@ -91,7 +91,7 @@ function Stage-InstallerSource {
     }
 
     # Copy core script, config, and directories
-    $itemsToStage = @("Install-AI-Lab.ps1", "config.json", "model-catalog.json", "docker", "scripts")
+    $itemsToStage = @("Install-AI-Lab.ps1", "AI-LAB.cmd", "config.json", "model-catalog.json", "docker", "scripts")
     foreach ($item in $itemsToStage) {
         $itemPath = Join-Path $sourceDir $item
         if (Test-Path -Path $itemPath) {
@@ -548,6 +548,12 @@ try {
         if (-not (Test-Path -Path $sourceDataFile)) { $sourceDataFile = Join-Path $PSScriptRoot $dataFile }
         if (Test-Path -Path $sourceDataFile) { Copy-Item -Path $sourceDataFile -Destination (Join-Path $InstallRoot $dataFile) -Force }
     }
+    $sourceControlLauncher = Join-Path $script:StagingDir "AI-LAB.cmd"
+    if (-not (Test-Path -Path $sourceControlLauncher)) { $sourceControlLauncher = Join-Path $PSScriptRoot "AI-LAB.cmd" }
+    if (Test-Path -Path $sourceControlLauncher) {
+        Copy-Item -Path $sourceControlLauncher -Destination (Join-Path $InstallRoot "AI-LAB.cmd") -Force
+        Write-Log "AI Lab Control Center deployed to '$InstallRoot\AI-LAB.cmd'." "SUCCESS"
+    }
 
     # =========================================================================
     # STAGE 5/9: STARTING DOCKER
@@ -771,6 +777,13 @@ volumes:
     try {
         $desktopPath = [Environment]::GetFolderPath("Desktop")
         $wshell = New-Object -ComObject WScript.Shell
+
+        # Beginner-friendly Control Center Shortcut
+        $controlLnk = $wshell.CreateShortcut((Join-Path $desktopPath "Icy AI Lab Control Center.lnk"))
+        $controlLnk.TargetPath = (Join-Path $InstallRoot "AI-LAB.cmd")
+        $controlLnk.WorkingDirectory = $InstallRoot
+        $controlLnk.Description = "Analyze hardware, find models, benchmark, and manage Icy AI Lab"
+        $controlLnk.Save()
 
         # Start Shortcut
         $startLnk = $wshell.CreateShortcut((Join-Path $desktopPath "Start AI Lab.lnk"))

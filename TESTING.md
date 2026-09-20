@@ -1,4 +1,4 @@
-# Icy AI Lab Testing Strategy & Windows Test Plan (v2.2.0)
+# Icy AI Lab Testing Strategy & Windows Test Plan (v2.3.0)
 
 This document outlines the validation suite and real Windows hardware testing plan for the **Icy AI Lab Installer**.
 
@@ -51,3 +51,7 @@ The automated test suite validates syntax, static analysis, file formatting, Pes
 | **TC-14** | **Model Manager Read-only Actions** | Run `catalog`, `assess`, and `recommend` with Ollama stopped or absent. | Catalog/assessment/recommendation output is available without invoking pulls/removals. | Installed models remain unchanged. |
 | **TC-15** | **Safe Pull Checks** | Request a catalog model with adequate space, then an unknown tag and a known model with insufficient/unavailable storage telemetry. | Explicit catalog model is checked first; unknown/unsafe requests fail closed. | Pull runs only after safe checks pass; no action ever auto-removes a model. |
 | **TC-16** | **PowerShell/Pester Compatibility** | Parse scripts under Windows PowerShell 5.1 and execute tests with Pester 3.4. | No PowerShell 7-only syntax or Pester 4/5-only assertions/configuration. | Parser is clean and compatibility tests pass. |
+| **TC-17** | **One-Click Control Center** | Double-click `AI-LAB.cmd` after installation. | Displays the seven beginner menu choices and does not invoke installation. | Analyze/recommend/report actions return to the menu without reinstalling. |
+| **TC-18** | **Sequential Multi-Model Benchmark** | Select several installed completion models using quick and comprehensive modes. | Uses identical settings per model, runs one model at a time, and continues after a model failure. | Reports include every successful/failed/skipped model and no parallel jobs are created. |
+| **TC-19** | **Low-Memory Benchmark Protection** | Run assessment with insufficient or unavailable RAM telemetry. | Model is postponed without loading; smaller installed choices may be offered by the guided workflow. | No unsafe forced inference and no unrelated resident model is unloaded. |
+| **TC-20** | **Readable and Shareable Reports** | Complete or cancel a benchmark after at least one result. | JSON, CSV, Markdown, and compact text reports are finalized. | Shared Markdown/text contains no username, profile path, machine name, credential, or prompt response. |

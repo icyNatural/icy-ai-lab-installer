@@ -2,6 +2,19 @@
 
 All notable changes to the **Icy AI Lab Installer** project will be documented in this file.
 
+## [2.3.0] - One-Click Control Center and Guided Benchmarking
+
+### Added
+- `AI-LAB.cmd` beginner control center for hardware analysis, model discovery, recommendations, services, reports, and advanced tools without rerunning installation.
+- Guided single-, selected-, compatible-, and automatic small-model comparisons using only installed completion models.
+- Compact benchmark output plus privacy-safe Markdown and text summaries alongside detailed JSON and CSV reports.
+- Evidence-based performance, correctness, cold/warm, task, and memory-residency insights.
+
+### Safety and compatibility
+- Benchmarks run sequentially, fail closed when resource availability cannot be verified, continue safely after individual model failures, and never download models.
+- Models already resident before a benchmark are not unloaded; cleanup is limited to benchmark-owned model loads.
+- Existing installer launchers, single-model benchmark commands, Lightweight Mode, model catalog, profiler, and management scripts remain available.
+
 ## [2.2.0] - Optional Adaptive Lightweight Mode
 
 ### Added

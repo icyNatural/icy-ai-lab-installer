@@ -1,13 +1,15 @@
 [CmdletBinding()]
 param(
- [string]$LabRoot=(Join-Path $env:USERPROFILE 'AI-Lab'),[string]$Model='',
+ [string]$LabRoot=(Join-Path $env:USERPROFILE 'AI-Lab'),[string[]]$Model=@(),
  [string]$Prompt='Explain quantum computing in 3 concise sentences.',
  [ValidateRange(0,100)][int]$Warmup=1,[ValidateRange(1,100)][int]$Runs=3,
  [string]$OllamaUrl='http://localhost:11434',[switch]$JsonOutput,
  [ValidateSet('Conversation','Summarization','Coding','Extraction','Reasoning','ToolUse','Custom')][string[]]$Tasks=@('Conversation','Summarization','Coding','Extraction','Reasoning','ToolUse'),
  [ValidateRange(128,1048576)][int[]]$ContextLength=@(2048),
  [ValidateRange(1,3600)][int]$TimeoutSec=300,[ValidateRange(1,3600)][int]$KeepAliveSec=300,
- [switch]$Quick,[switch]$LibraryMode
+ [switch]$Quick,[switch]$AllModels,[switch]$AutoSelect,[switch]$GuidedSelection,
+ [ValidateRange(1,20)][int]$AutoSelectCount=3,
+ [switch]$LibraryMode
 )
 $ErrorActionPreference='Stop'; Set-StrictMode -Version Latest
 
@@ -48,7 +50,7 @@ function Get-BenchmarkHardware {
  $cpu=$null;$os=$null
  try{$cpu=Get-CimInstance Win32_Processor|Select-Object -First 1}catch{}
  try{$os=Get-CimInstance Win32_OperatingSystem}catch{}
- [pscustomobject][ordered]@{CPUName=if($cpu){[string]$cpu.Name}else{$null};InstalledRAMGB=if($os){[math]::Round([double]$os.TotalVisibleMemorySize/1MB,2)}else{$null};MachineName=$env:COMPUTERNAME;Source='Windows CIM';Measured=$true}
+ [pscustomobject][ordered]@{CPUName=if($cpu){[string]$cpu.Name}else{$null};InstalledRAMGB=if($os){[math]::Round([double]$os.TotalVisibleMemorySize/1MB,2)}else{$null};Source='Windows CIM';Measured=$true}
 }
 
 
@@ -71,7 +73,50 @@ function Get-Residency {
  [pscustomobject]@{Resident=$true;SizeBytes=$size;SizeVramBytes=$vram;SpilloverBytes=$spill;ExpiresAt=(Get-PropertyValue $item[0] expires_at)}
 }
 function Test-CompletionModel {param($ShowResponse);$caps=@(Get-PropertyValue $ShowResponse capabilities @());if($caps){return $caps-contains 'completion'};$family=[string](Get-PropertyValue (Get-PropertyValue $ShowResponse details) family '');$family-notmatch '(?i)bert|embed'}
-
+function Get-InstalledModelName { param($Item);if($Item.PSObject.Properties['name']){return [string]$Item.name};[string]$Item.model }
+function Select-BenchmarkModels {
+ param([object[]]$Installed,[string[]]$Requested,[switch]$All,[switch]$Auto,[switch]$Guided,[scriptblock]$ShowModel)
+ $names=@($Installed|ForEach-Object{Get-InstalledModelName $_}|Where-Object{$_}|Select-Object -Unique)
+ if($Requested.Count){$missing=@($Requested|Where-Object{$names-notcontains $_});if($missing){throw "Model is not installed: $($missing -join ', ')"};$candidates=@($Requested|Select-Object -Unique)}elseif($All-or $Auto-or $Guided){$candidates=$names}else{$candidates=$names}
+  $compatible=@();foreach($name in $candidates){try{$show=& $ShowModel $name;if(Test-CompletionModel $show){$item=@($Installed|Where-Object{(Get-InstalledModelName $_)-eq $name}|Select-Object -First 1);$compatible+=[pscustomobject]@{Name=$name;SizeBytes=[double](Get-PropertyValue $item[0] size 0);Show=$show}}}catch [Management.Automation.PipelineStoppedException]{throw}catch{}}
+ if($Guided){Write-Host 'Compatible installed models:';for($i=0;$i-lt $compatible.Count;$i++){Write-Host "[$($i+1)] $($compatible[$i].Name)"};$answer=Read-Host 'Enter comma-separated numbers (blank selects all)';if($answer){$picked=@();foreach($n in $answer-split ','){if($n.Trim()-match '^\d+$'-and [int]$n-ge 1-and [int]$n-le $compatible.Count){$picked+=$compatible[[int]$n-1]}};$compatible=$picked}}
+  if($Auto){$compatible=@($compatible|Sort-Object SizeBytes,Name|Select-Object -First $AutoSelectCount)}
+ @($compatible)
+}
+function Get-ResourceAvailability {
+ param([string]$Path)
+ $freeRam=$null;$freeDisk=$null;try{$os=Get-CimInstance Win32_OperatingSystem;$freeRam=[double]$os.FreePhysicalMemory*1KB}catch{}
+ try{$probe=$Path;while($probe-and -not(Test-Path $probe)){$probe=Split-Path $probe -Parent};$freeDisk=[double](Get-Item $probe).PSDrive.Free}catch{}
+ [pscustomobject]@{AvailableRamBytes=$freeRam;AvailableStorageBytes=$freeDisk}
+}
+function Test-ModelResourceGate {
+ param([double]$ModelSizeBytes,$Resources)
+  # Quantized weights need runtime/context overhead. Unknown measurements fail closed.
+ $required=[math]::Ceiling([math]::Max(1,$ModelSizeBytes)*1.25)
+ $ram=Get-PropertyValue $Resources AvailableRamBytes;$disk=Get-PropertyValue $Resources AvailableStorageBytes
+  $minimumReportDisk=10MB;$known=($null-ne $ram-and $null-ne $disk);$ok=$known-and $ram-ge $required-and $disk-ge $minimumReportDisk
+  [pscustomobject]@{Allowed=$ok;RequiredBytes=$required;RequiredReportDiskBytes=$minimumReportDisk;AvailableRamBytes=$ram;AvailableStorageBytes=$disk;Reason=$(if($ok){'Available'}elseif(-not$known){'RAM or storage availability could not be verified; postponed without loading'}elseif($ram-lt$required){'Insufficient available RAM; postponed without loading'}else{'Insufficient disk space to write benchmark reports; postponed without loading'})}
+}
+function Format-MetricValue {param($Value,[int]$Digits=2);if($null-eq $Value){return '-'};([math]::Round([double]$Value,$Digits)).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)}
+function Format-CompactResult {
+ param($Metric,[int]$Width=0)
+ $fields=[ordered]@{Model=$Metric.Model;Task=$Metric.Task;'Cold/Warm'=$Metric.Temperature;TTFT=(Format-MetricValue $Metric.TTFTSeconds);Load=(Format-MetricValue $Metric.LoadSeconds);'Tokens/sec'=(Format-MetricValue $Metric.GenerationTokensPerSecond);Correct=[string]$Metric.Correct}
+ $line=(($fields.Values|ForEach-Object{[string]$_})-join '|');if($Width-le 0){try{$Width=$Host.UI.RawUI.WindowSize.Width}catch{$Width=120}}
+ if($Width-ge $line.Length){return $line}
+ ($fields.GetEnumerator()|ForEach-Object{"$($_.Key): $($_.Value)"})-join [Environment]::NewLine
+}
+function Get-BenchmarkInsights {
+ param([object[]]$Runs)
+ if(!$Runs-or $Runs.Count-lt 2){return @('Insufficient evidence: fewer than two successful measured runs.')}
+  $out=@();$rates=@($Runs|Where-Object{$null-ne $_.GenerationTokensPerSecond}|Sort-Object GenerationTokensPerSecond -Descending);if($rates){$out+="Generation speed: within these measured rows only, $($rates[0].Model) recorded the highest observed rate ($(Format-MetricValue $rates[0].GenerationTokensPerSecond) tokens/sec). More runs and tasks are needed for a general conclusion."}
+  $responses=@($Runs|Where-Object{$null-ne $_.TTFTSeconds}|Sort-Object TTFTSeconds);if($responses){$out+="Responsiveness: $($responses[0].Model) had the lowest observed time to first token ($(Format-MetricValue $responses[0].TTFTSeconds)s) in the measured rows."}
+ $correct=@($Runs|Where-Object Correct).Count;$out+="Correctness: $correct of $($Runs.Count) measured runs passed deterministic task checks."
+  $pairs=@($Runs|Group-Object Model,Task,ContextLength,Run|Where-Object{@($_.Group|Where-Object Temperature -eq Cold).Count-and @($_.Group|Where-Object Temperature -eq Warm).Count});if($pairs.Count){$coldRows=@($pairs|ForEach-Object{$_.Group|Where-Object Temperature -eq Cold|Select-Object -First 1});$warmRows=@($pairs|ForEach-Object{$_.Group|Where-Object Temperature -eq Warm|Select-Object -First 1});$cold=Get-NullableAverage $coldRows TTFTSeconds;$warm=Get-NullableAverage $warmRows TTFTSeconds;$coldLoad=Get-NullableAverage $coldRows LoadSeconds;$loadText=if($null-ne$coldLoad){"; average measured cold load was $(Format-MetricValue $coldLoad)s"}else{'; cold-load timing was unavailable'};$out+="Cold/warm: across $($pairs.Count) paired run(s), average TTFT was $(Format-MetricValue $cold)s cold and $(Format-MetricValue $warm)s warm$loadText."}else{$out+='Cold/warm: insufficient paired timing evidence; additional cold and warm runs are needed.'}
+  foreach($group in @($Runs|Group-Object Model,Task)){$items=@($group.Group);$passed=@($items|Where-Object Correct).Count;$out+="Task evidence: $($items[0].Model) passed $passed of $($items.Count) measured $($items[0].Task) run(s)."}
+  $spill=@($Runs|Where-Object{$null-ne $_.SpilloverBytes-and [double]$_.SpilloverBytes-gt 0}).Count;$out+="Residency/spillover: $spill run(s) reported CPU/RAM spillover after generation.";$out+="Scope: evidence covers $(@($Runs.Task|Select-Object -Unique).Count) task type(s); untested tasks require additional benchmarking.";@($out)
+}
+function Remove-PrivateText {param([string]$Text);if($null-eq $Text){return ''};foreach($private in @($env:USERPROFILE,$env:USERNAME,$env:COMPUTERNAME)|Where-Object{$_}){$Text=$Text-replace ('(?i)'+[regex]::Escape([string]$private)),'[redacted]'};$Text=$Text-replace '(?i)\b(password|secret|token|credential|api[_ -]?key)\s*[:=]\s*\S+','$1=[redacted]';$Text=$Text-replace '(?i)(?:[A-Z]:\\|\\\\)[^\r\n|]+','[private path]';$Text}
+function ConvertTo-SafeReportCell {param($Value);(Remove-PrivateText ([string]$Value))-replace '\|','/' -replace '[\r\n]+',' '}
 
 function Invoke-OllamaStream {
  param([string]$Uri,[hashtable]$Body,[int]$Timeout=300);$Body.stream=$true
@@ -89,30 +134,34 @@ function Convert-RunMetric {
 }
 
 
+function New-ShareReportContent {
+ param([object[]]$Summary,[string[]]$Insights,[string]$Timestamp,[object[]]$Skipped=@(),[object[]]$Failures=@())
+  $rows=@('Model|Task|Cold/Warm|TTFT|Load|Tokens/sec|Correct');foreach($s in $Summary){$values=@($s.Model,$s.Task,$s.Temperature,(Format-MetricValue $s.AverageTTFTSeconds),(Format-MetricValue $s.AverageLoadSeconds),(Format-MetricValue $s.AverageGenerationTokensPerSecond),"$($s.CorrectRuns)/$($s.Runs)")|ForEach-Object{ConvertTo-SafeReportCell $_};$rows+=($values-join '|')};$safe=@($Insights|ForEach-Object{Remove-PrivateText $_});$status=@();foreach($item in $Skipped){$status+="Skipped: $(ConvertTo-SafeReportCell $item.Model) - $(ConvertTo-SafeReportCell $item.Reason)"};foreach($item in $Failures){$status+="Failed: $(ConvertTo-SafeReportCell $item.Model) / $(ConvertTo-SafeReportCell $item.Stage). See the private JSON report for diagnostics."}
+  [pscustomobject]@{Text=((@('Icy AI Lab Benchmark',"Generated: $Timestamp")+$rows+@('Status:')+$status+@('Insights:')+$safe)-join "`r`n");Markdown=((@('# Icy AI Lab Benchmark',"Generated: $Timestamp",'','|Model|Task|Cold/Warm|TTFT|Load|Tokens/sec|Correct|','|---|---|---|---:|---:|---:|---|')+@($rows|Select-Object -Skip 1|ForEach-Object{"|$_|"})+@('','## Status')+@($status|ForEach-Object{"- $_"})+@('','## Evidence-based insights')+@($safe|ForEach-Object{"- $_"}))-join "`r`n")}
+}
 if($LibraryMode){return}
 function Write-Log([string]$Message,[string]$Level='INFO'){if(!$JsonOutput){Write-Host "[$Level] $Message"}}
-# Preserve the legacy custom-prompt workflow when -Prompt is explicitly supplied.
-if($PSBoundParameters.ContainsKey('Prompt')-and -not $PSBoundParameters.ContainsKey('Tasks')){$Tasks=@('Custom')}
-if($Quick){$Runs=1;$Warmup=0;$Tasks=@('Custom');$ContextLength=@(2048)}
-$OllamaUrl=$OllamaUrl.TrimEnd('/')
-try{$version=Invoke-RestMethod "$OllamaUrl/api/version" -TimeoutSec 5}catch{Write-Error "Ollama is not reachable at $OllamaUrl";return}
-if([string]::IsNullOrWhiteSpace($Model)){$models=@((Invoke-RestMethod "$OllamaUrl/api/tags" -TimeoutSec 10).models|ForEach-Object{$_.name});if($Quick-and $models.Count-gt 1){$models=@($models[0])}}else{$models=@($Model)}
-if(!$models){Write-Error 'No Ollama models found.';return}
-$allRuns=@();$skipped=@()
-foreach($m in $models){
- try{$show=Invoke-OllamaJson "$OllamaUrl/api/show" @{model=$m} $TimeoutSec}catch{$skipped+=[pscustomobject]@{Model=$m;Reason="Show failed: $($_.Exception.Message)"};continue}
- if(-not(Test-CompletionModel $show)){$skipped+=[pscustomobject]@{Model=$m;Reason='No completion capability; embedding-only models are not sent to /api/generate.'};continue}
- Write-Log "Benchmarking $m"
- foreach($ctx in $ContextLength){foreach($taskName in $Tasks){$task=New-TaskDefinition $taskName $Prompt
-  for($w=0;$w-lt $Warmup;$w++){if($task.Name-eq 'ToolUse'){$warmEndpoint="$OllamaUrl/api/chat";$body=@{model=$m;messages=@(@{role='user';content=$task.Prompt});tools=$task.Tools;stream=$false;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0}}}else{$warmEndpoint="$OllamaUrl/api/generate";$body=@{model=$m;prompt=$task.Prompt;stream=$false;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0}};if($task.Format){$body.format=$task.Format}};try{[void](Invoke-OllamaJson $warmEndpoint $body $TimeoutSec)}catch{Write-Log "Warmup failed: $_" WARN}}
-  for($run=1;$run-le $Runs;$run++){foreach($temperature in @('Cold','Warm')){
-   if($temperature-eq 'Cold'){try{$unloaded=Stop-OllamaModel $OllamaUrl $m $TimeoutSec}catch{Write-Log "Unload failed for $m; cold run skipped: $_" WARN;continue};if(-not $unloaded){Write-Log "Could not verify unload for $m; cold run skipped" WARN;continue}}
-   $before=Get-SystemSample;$nb=Get-NvidiaSample;if($task.Name-eq 'ToolUse'){$endpoint="$OllamaUrl/api/chat";$body=@{model=$m;messages=@(@{role='user';content=$task.Prompt});tools=$task.Tools;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0;seed=42}}}else{$endpoint="$OllamaUrl/api/generate";$body=@{model=$m;prompt=$task.Prompt;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0;seed=42}};if($task.Format){$body.format=$task.Format}}
-   try{$stream=Invoke-OllamaStream $endpoint $body $TimeoutSec;$correct=Test-TaskResponse $stream.Text $task;$after=Get-SystemSample;$na=Get-NvidiaSample;$resident=Get-Residency $OllamaUrl $m;$allRuns+=Convert-RunMetric $stream $m $task.Name $ctx $run $temperature $before $after $nb $na $resident $correct}catch{Write-Log "$temperature run failed for $m/$($task.Name): $_" WARN}
-  }}
- }}}
-$summary=@($allRuns|Group-Object Model,Task,ContextLength,Temperature|ForEach-Object{$g=@($_.Group);[pscustomobject]@{Model=$g[0].Model;Task=$g[0].Task;ContextLength=$g[0].ContextLength;Temperature=$g[0].Temperature;Runs=$g.Count;CorrectRuns=@($g|Where-Object Correct).Count;AverageTTFTSeconds=(Get-NullableAverage $g TTFTSeconds);AverageLoadSeconds=(Get-NullableAverage $g LoadSeconds);AverageGenerationTokensPerSecond=(Get-NullableAverage $g GenerationTokensPerSecond 2)}})
-$logDir=Join-Path $LabRoot logs;if(!(Test-Path $logDir)){New-Item $logDir -ItemType Directory -Force|Out-Null};$stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff';$jsonPath=Join-Path $logDir "benchmark_$stamp.json";$csvPath=Join-Path $logDir "benchmark_$stamp-runs.csv"
-$report=[ordered]@{SchemaVersion='1.0';ReportType='IcyAILabBenchmark';Timestamp=(Get-Date).ToString('o');Hardware=Get-BenchmarkHardware;OllamaVersion=(Get-PropertyValue $version version);Configuration=[ordered]@{Runs=$Runs;Warmup=$Warmup;Tasks=$Tasks;ContextLengths=$ContextLength;KeepAliveSeconds=$KeepAliveSec;Streaming=$true};SkippedModels=$skipped;Summary=$summary;Runs=$allRuns;Files=[ordered]@{Json=$jsonPath;Csv=$csvPath}}
-$json=$report|ConvertTo-Json -Depth 8;Set-Content $jsonPath $json -Encoding UTF8;$allRuns|Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
-if($JsonOutput){$json}else{Write-Log "JSON: $jsonPath" SUCCESS;Write-Log "Per-run CSV: $csvPath" SUCCESS;$summary|Format-Table -AutoSize;$report}
+if($PSBoundParameters.ContainsKey('Prompt')-and -not $PSBoundParameters.ContainsKey('Tasks')){$Tasks=@('Custom')};if($Quick){$Runs=1;$Warmup=0;$Tasks=@('Custom');$ContextLength=@(2048)}
+ $OllamaUrl=$OllamaUrl.TrimEnd('/');$allRuns=@();$skipped=@();$failures=@();$cancelled=$false;$setupFailed=$false;$version=$null;$initialNames=@();$owned=@();$logDir=Join-Path $LabRoot logs;if(!(Test-Path $logDir)){New-Item $logDir -ItemType Directory -Force|Out-Null};$stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+try{
+ $version=Invoke-RestMethod "$OllamaUrl/api/version" -TimeoutSec 5;$installed=@((Invoke-RestMethod "$OllamaUrl/api/tags" -TimeoutSec 10).models);$initialNames=@(Get-OllamaProcesses $OllamaUrl 10|%{Get-InstalledModelName $_})
+  $selected=@(Select-BenchmarkModels $installed $Model -All:$AllModels -Auto:$AutoSelect -Guided:$GuidedSelection -ShowModel {param($n) Invoke-OllamaJson "$OllamaUrl/api/show" @{model=$n} $TimeoutSec});if(!$selected){throw 'No compatible installed completion models were selected.'};$total=$selected.Count*$ContextLength.Count*$Tasks.Count*$Runs*2;$step=0;if(!$JsonOutput){Write-Host 'Model|Task|Cold/Warm|TTFT|Load|Tokens/sec|Correct'}
+ foreach($selection in $selected){$m=$selection.Name;$wasInitial=$initialNames-contains $m;if($initialNames.Count-and -not$wasInitial){$skipped+=[pscustomobject]@{Model=$m;Reason="Postponed to protect initially resident model(s): $($initialNames -join ', ')"};continue};$gate=Test-ModelResourceGate $selection.SizeBytes (Get-ResourceAvailability $LabRoot);if(!$gate.Allowed){$skipped+=[pscustomobject]@{Model=$m;Reason=$gate.Reason};continue};if(!$wasInitial){$owned+=$m};Write-Log "Benchmarking $m"
+  foreach($ctx in $ContextLength){foreach($taskName in $Tasks){$task=New-TaskDefinition $taskName $Prompt
+ for($w=0;$w-lt$Warmup;$w++){try{$wb=@{model=$m;stream=$false;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0}};if($task.Name-eq 'ToolUse'){$we="$OllamaUrl/api/chat";$wb.messages=@(@{role='user';content=$task.Prompt});$wb.tools=$task.Tools}else{$we="$OllamaUrl/api/generate";$wb.prompt=$task.Prompt;if($task.Format){$wb.format=$task.Format}};[void](Invoke-OllamaJson $we $wb $TimeoutSec)}catch [Management.Automation.PipelineStoppedException]{$cancelled=$true;throw}catch{$failures+=[pscustomobject]@{Model=$m;Task=$task.Name;Stage='Warmup';Error=$_.Exception.Message}}}
+   for($run=1;$run-le $Runs;$run++){foreach($temperature in @('Cold','Warm')){$step++;Write-Progress -Activity 'AI Lab benchmark' -Status "$m / $($task.Name) / $temperature" -PercentComplete (100*$step/$total)
+ if($temperature-eq 'Cold'-and $wasInitial){$skipped+=[pscustomobject]@{Model=$m;Reason='Cold run omitted: initially resident model is not benchmark-owned.'};continue};if($temperature-eq 'Cold'){try{if(!(Stop-OllamaModel $OllamaUrl $m $TimeoutSec)){throw 'Unload not verified'}}catch [Management.Automation.PipelineStoppedException]{$cancelled=$true;throw}catch{$failures+=[pscustomobject]@{Model=$m;Task=$task.Name;Stage='ColdUnload';Error=$_.Exception.Message};continue}}
+    $before=Get-SystemSample;$nb=Get-NvidiaSample;$body=@{model=$m;keep_alive="${KeepAliveSec}s";options=@{num_ctx=$ctx;temperature=0;seed=42}};if($task.Name-eq 'ToolUse'){$endpoint="$OllamaUrl/api/chat";$body.messages=@(@{role='user';content=$task.Prompt});$body.tools=$task.Tools}else{$endpoint="$OllamaUrl/api/generate";$body.prompt=$task.Prompt;if($task.Format){$body.format=$task.Format}}
+    try{$stream=Invoke-OllamaStream $endpoint $body $TimeoutSec;$metric=Convert-RunMetric $stream $m $task.Name $ctx $run $temperature $before (Get-SystemSample) $nb (Get-NvidiaSample) (Get-Residency $OllamaUrl $m) (Test-TaskResponse $stream.Text $task);$allRuns+=$metric;if(!$JsonOutput){Write-Host (Format-CompactResult $metric)}}catch [Management.Automation.PipelineStoppedException]{$cancelled=$true;throw}catch{$failures+=[pscustomobject]@{Model=$m;Task=$task.Name;Stage=$temperature;Error=$_.Exception.Message}}
+   }}
+  }};if($owned-contains $m){try{[void](Stop-OllamaModel $OllamaUrl $m $TimeoutSec)}catch{}}
+ }
+}catch [Management.Automation.PipelineStoppedException]{$cancelled=$true}catch{$setupFailed=$true;$failures+=[pscustomobject]@{Model=$null;Task=$null;Stage='Setup';Error=$_.Exception.Message};Write-Log $_.Exception.Message ERROR}
+finally{
+ Write-Progress -Activity 'AI Lab benchmark' -Completed;foreach($name in @($owned|Select -Unique)){try{if($initialNames-notcontains $name){[void](Stop-OllamaModel $OllamaUrl $name ([math]::Min($TimeoutSec,30)))}}catch{}}
+ $summary=@($allRuns|Group-Object Model,Task,ContextLength,Temperature|%{$g=@($_.Group);[pscustomobject]@{Model=$g[0].Model;Task=$g[0].Task;ContextLength=$g[0].ContextLength;Temperature=$g[0].Temperature;Runs=$g.Count;CorrectRuns=@($g|? Correct).Count;AverageTTFTSeconds=Get-NullableAverage $g TTFTSeconds;AverageLoadSeconds=Get-NullableAverage $g LoadSeconds;AverageGenerationTokensPerSecond=Get-NullableAverage $g GenerationTokensPerSecond 2}});$insights=@(Get-BenchmarkInsights $allRuns);$timestamp=(Get-Date).ToString('o')
+ $jsonPath=Join-Path $logDir "benchmark_$stamp.json";$csvPath=Join-Path $logDir "benchmark_$stamp-runs.csv";$mdPath=Join-Path $logDir "benchmark_$stamp.md";$textPath=Join-Path $logDir "benchmark_$stamp.txt";$share=New-ShareReportContent $summary $insights $timestamp $skipped $failures
+ $report=[ordered]@{SchemaVersion='1.0';ReportType='IcyAILabBenchmark';Timestamp=$timestamp;Cancelled=$cancelled;Hardware=Get-BenchmarkHardware;OllamaVersion=Get-PropertyValue $version version;Configuration=[ordered]@{Runs=$Runs;Warmup=$Warmup;Tasks=$Tasks;ContextLengths=$ContextLength;KeepAliveSeconds=$KeepAliveSec;Streaming=$true;Sequential=$true};InitialResidentModels=$initialNames;SkippedModels=$skipped;Failures=$failures;Insights=$insights;Summary=$summary;Runs=$allRuns;Files=[ordered]@{Json=$jsonPath;Csv=$csvPath;Markdown=$mdPath;Text=$textPath}}
+ $json=$report|ConvertTo-Json -Depth 8;Set-Content $jsonPath $json -Encoding UTF8;if($allRuns.Count){$allRuns|Export-Csv $csvPath -NoTypeInformation -Encoding UTF8}else{Set-Content $csvPath 'Model,Task,ContextLength,Run,Temperature,TTFTSeconds,LoadSeconds,GenerationTokensPerSecond,Correct' -Encoding UTF8};Set-Content $mdPath $share.Markdown -Encoding UTF8;Set-Content $textPath $share.Text -Encoding UTF8
+ if($JsonOutput){$json}else{Write-Log "JSON: $jsonPath" SUCCESS;Write-Log "CSV: $csvPath" SUCCESS;Write-Log "Markdown: $mdPath" SUCCESS;Write-Log "Shareable text: $textPath" SUCCESS;$report};if($cancelled){exit 130};if($setupFailed-or !$allRuns.Count){exit 2}
+}

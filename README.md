@@ -1,4 +1,4 @@
-# Icy AI Lab Installer (v2.2.0)
+# Icy AI Lab Installer (v2.3.0)
 
 Production-quality portable Windows bootstrapper and management suite for a local AI workstation.
 
@@ -11,6 +11,22 @@ Production-quality portable Windows bootstrapper and management suite for a loca
 3. Click **Yes** on the Windows UAC prompt.
 
 *No manual PowerShell execution policy commands required.*
+
+## After Installation: One-Click Control Center
+
+Double-click **`AI-LAB.cmd`** in your installed AI Lab folder, or use the **Icy AI Lab Control Center** desktop shortcut. This opens a beginner-friendly menu; it does not reinstall anything.
+
+```text
+1. Analyze my computer
+2. Find my best AI models
+3. Discover and install compatible models
+4. Manage AI Lab services
+5. View previous benchmark reports
+6. Advanced tools
+7. Exit
+```
+
+Choose **Find my best AI models** to select a task, see hardware-aware recommendations, and optionally compare a small set of suitable models already installed on the computer. The comparison never downloads a model.
 
 ---
 
@@ -57,6 +73,18 @@ Measures LLM load time, sustained tokens per second, prompt processing speed, an
 ```powershell
 .\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b -Quick
 
+# Compare selected installed models with identical quick settings
+.\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b,llama3.2:3b -Quick
+
+# Select from installed compatible models interactively
+.\scripts\Benchmark-AI-Lab.ps1 -GuidedSelection -Quick
+
+# Compare all installed completion models sequentially
+.\scripts\Benchmark-AI-Lab.ps1 -AllModels -Quick
+
+# Automatically compare up to three smaller suitable installed models
+.\scripts\Benchmark-AI-Lab.ps1 -AutoSelect -Quick
+
 # Optional repeatable task/context suite
 .\scripts\Benchmark-AI-Lab.ps1 -Model qwen3.5:4b `
     -Tasks Conversation,Summarization,Coding,Extraction,Reasoning,ToolUse `
@@ -65,6 +93,7 @@ Measures LLM load time, sustained tokens per second, prompt processing speed, an
 - Cold runs use Ollama's non-destructive `keep_alive: 0` unload operation; warm runs follow with the model resident.
 - Task correctness is recorded separately from speed. Streaming time-to-first-token, load time, prompt speed, generation speed, RAM, Ollama GPU residency/spillover, and supported NVIDIA power telemetry are exported to JSON and per-run CSV.
 - Unsupported telemetry is marked unavailable; benchmark values are never synthesized.
+- Benchmark reports are written as detailed JSON/CSV plus readable Markdown and compact privacy-safe text. Use Control Center option 5 to open or copy previous results.
 
 ---
 
@@ -109,7 +138,7 @@ A local Windows run during documentation reported an `AMD Ryzen 7 6800H with Rad
 
 ---
 
-## Robust Systems Engineering Features (v2.2.0)
+## Robust Systems Engineering Features (v2.3.0)
 
 ### 1. Phase-Based State Machine
 The installer tracks progress across 10 durable execution phases saved in `%LOCALAPPDATA%\IcyAILab\installer-state.json`:

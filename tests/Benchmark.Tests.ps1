@@ -10,7 +10,7 @@ Describe 'Benchmark AI Lab unit and static behavior' {
  }
  It 'retains legacy parameters and exposes safe controls' {
   $command=Get-Command $scriptPath
-  foreach($name in 'LabRoot','Model','Prompt','Warmup','Runs','OllamaUrl','JsonOutput','Quick','ContextLength','Tasks'){$command.Parameters.ContainsKey($name)|Should Be $true}
+  foreach($name in 'LabRoot','Model','Prompt','Warmup','Runs','OllamaUrl','JsonOutput','PassThru','Quick','ContextLength','Tasks'){$command.Parameters.ContainsKey($name)|Should Be $true}
  }
  It 'converts official nanosecond metrics without inventing absent values' {
   (Convert-NanosecondsToSeconds 2500000000)|Should Be 2.5
@@ -85,6 +85,19 @@ Describe 'Benchmark AI Lab unit and static behavior' {
   (Test-ModelResourceGate 100 ([pscustomobject]@{AvailableRamBytes=125;AvailableStorageBytes=20MB})).Allowed|Should Be $true
   (Test-ModelResourceGate 100 ([pscustomobject]@{AvailableRamBytes=$null;AvailableStorageBytes=$null})).Allowed|Should Be $false
   (Test-ModelResourceGate 100 ([pscustomobject]@{AvailableRamBytes=$null;AvailableStorageBytes=$null})).Reason|Should Match 'could not be verified'
+ }
+ It 'uses 64-bit arithmetic for installed models larger than two GB' {
+  $gate=Test-ModelResourceGate 3338801804 ([pscustomobject]@{AvailableRamBytes=500MB;AvailableStorageBytes=20MB})
+  $gate.Allowed|Should Be $false
+  $gate.RequiredBytes|Should BeGreaterThan 4000000000
+  $gate.Reason|Should Match 'Only .* GB RAM is available.*needs about .* GB'
+ }
+ It 'maps completed partial postponed cancelled and error exit codes distinctly' {
+  (Get-BenchmarkExitCode $false $false 2 0 0)|Should Be 0
+  (Get-BenchmarkExitCode $false $false 1 1 0)|Should Be 20
+  (Get-BenchmarkExitCode $false $false 0 2 0)|Should Be 10
+  (Get-BenchmarkExitCode $true $false 1 0 0)|Should Be 130
+  (Get-BenchmarkExitCode $false $true 0 0 1)|Should Be 2
  }
  It 'emits the exact compact fields and falls back without losing fields' {
   $m=[pscustomobject]@{Model='m';Task='t';Temperature='Cold';TTFTSeconds=.1;LoadSeconds=.2;GenerationTokensPerSecond=3;Correct=$true}

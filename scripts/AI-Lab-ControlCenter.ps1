@@ -66,17 +66,42 @@ function New-ShareClipboardCommandSpec {
     if(-not(Test-Path -LiteralPath $ReportPath -PathType Leaf)){throw "Report not found: $ReportPath"}
     [pscustomobject]@{Command='Set-Clipboard';Value=(Get-Content -LiteralPath $ReportPath -Raw);SourcePath=[IO.Path]::GetFullPath($ReportPath)}
 }
+function Get-LatestBenchmarkJson {
+    param([string]$LabRoot,[datetime]$Since=[datetime]::MinValue)
+    $logs=Join-Path $LabRoot 'logs';if(-not(Test-Path -LiteralPath $logs)){return $null}
+    @(Get-ChildItem -LiteralPath $logs -Filter 'benchmark_*.json' -File -ErrorAction SilentlyContinue|Where-Object{$_.LastWriteTime-ge$Since}|Sort-Object LastWriteTime -Descending|Select-Object -First 1)
+}
+function Get-BenchmarkOutcome {
+    [CmdletBinding()]param([int]$ExitCode,[string]$ReportPath)
+    $report=$null;if($ReportPath-and(Test-Path -LiteralPath $ReportPath -PathType Leaf)){try{$report=Get-Content -LiteralPath $ReportPath -Raw|ConvertFrom-Json}catch{}}
+    if($null-eq$report){return [pscustomobject]@{Status='Error';Message="The comparison stopped unexpectedly (exit code $ExitCode) and no readable diagnostic report was produced.";ReportPath=$ReportPath}}
+    $runs=@($report.Runs).Count;$skipped=@($report.SkippedModels);$failures=@($report.Failures)
+    if([bool]$report.Cancelled-or$ExitCode-eq130){$status='Cancelled';$message="The comparison was cancelled after $runs measured run(s). Partial results were saved."}
+    elseif($runs-gt0-and($failures.Count-or$skipped.Count-or$ExitCode-eq20)){$status='Partial';$message="The comparison completed partially: $runs measured run(s), $($skipped.Count) safely postponed model(s), and $($failures.Count) error(s)."}
+    elseif($runs-gt0){$status='Completed';$message="The comparison completed with $runs measured run(s)."}
+    elseif($skipped.Count-gt0-and$failures.Count-eq0){$status='Postponed';$details=@($skipped|ForEach-Object{"$($_.Model): $($_.Reason)"})-join ' ';$message="No model was loaded. The comparison was safely postponed. $details"}
+    else{$status='Error';$detail=if($failures.Count){$failures[0].Error}else{"Exit code $ExitCode"};$message="The comparison could not run because of an unexpected error: $detail"}
+    [pscustomobject]@{Status=$status;Message=$message;ReportPath=$ReportPath;Runs=$runs;Skipped=$skipped.Count;Failures=$failures.Count}
+}
+function Invoke-AILabBenchmark {
+    [CmdletBinding()]param([Parameter(Mandatory=$true)]$Paths,[hashtable]$Parameters=@{})
+    $started=Get-Date;$code=Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' $Parameters -SuppressExitMessage;$latest=@(Get-LatestBenchmarkJson $Paths.LabRoot $started|Select-Object -First 1);$path=if($latest.Count){$latest[0].FullName}else{$null};$outcome=Get-BenchmarkOutcome $code $path
+    $color=switch($outcome.Status){'Completed'{'Green'}'Partial'{'Yellow'}'Postponed'{'Yellow'}'Cancelled'{'Yellow'}default{'Red'}}
+    Write-Host "`n$($outcome.Message)" -ForegroundColor $color
+    if($outcome.ReportPath){Write-Host "Diagnostic report: $($outcome.ReportPath)" -ForegroundColor DarkGray}
+    return $outcome
+}
 
 function Write-Menu {param([string]$Title,[object[]]$Items);Clear-Host;Write-Host ('='*62)-ForegroundColor DarkCyan;Write-Host "  $Title" -ForegroundColor Cyan;Write-Host ('='*62)-ForegroundColor DarkCyan;foreach($item in $Items){Write-Host("  {0}. {1}"-f$item.Key,$item.Label)};Write-Host}
 function Pause-ControlCenter {[void](Read-Host 'Press Enter to continue')}
 function Invoke-AILabChildScript {
-    [CmdletBinding()]param([Parameter(Mandatory=$true)]$Paths,[Parameter(Mandatory=$true)][string]$Name,[hashtable]$Parameters=@{})
+    [CmdletBinding()]param([Parameter(Mandatory=$true)]$Paths,[Parameter(Mandatory=$true)][string]$Name,[hashtable]$Parameters=@{},[switch]$SuppressExitMessage)
     $scriptPath=Resolve-AILabScript $Paths $Name
     if(-not$scriptPath){Write-Host "This tool is unavailable because '$Name' could not be found." -ForegroundColor Yellow;Write-Host("Looked in: {0}"-f(@($Paths.ScriptRoots)-join'; '))-ForegroundColor DarkGray;return 127}
     $spec=New-AILabChildProcessSpec $scriptPath $Paths.LabRoot $Parameters
     Write-Host "`nStarting $Name in an isolated PowerShell process..." -ForegroundColor Cyan
-    &$spec.FilePath @($spec.ArgumentList);$code=$LASTEXITCODE
-    if($code-ne 0){Write-Host "$Name exited with code $code." -ForegroundColor Yellow};$code
+    &$spec.FilePath @($spec.ArgumentList)|Out-Host;$code=[int]$LASTEXITCODE
+    if($code-ne 0-and-not$SuppressExitMessage){Write-Host "$Name exited with code $code." -ForegroundColor Yellow};$code
 }
 
 function Read-TaskChoice {
@@ -92,7 +117,7 @@ function Invoke-AnalyzeFlow {
  param($Paths);[void](Invoke-AILabChildScript $Paths 'Profile-AI-Lab.ps1')
  Write-Host "`nWould you also like to test installed model performance?" -ForegroundColor Cyan
  Write-Host '  1. Quick guided test (recommended for beginners)';Write-Host '  2. Comprehensive guided test';Write-Host '  3. Not now'
- switch(Read-Host 'Choose [3]'){'1'{[void](Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' @{Quick=$true;GuidedSelection=$true})}'2'{[void](Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' @{GuidedSelection=$true})}}
+  switch(Read-Host 'Choose [3]'){'1'{[void](Invoke-AILabBenchmark $Paths @{Quick=$true;GuidedSelection=$true})}'2'{[void](Invoke-AILabBenchmark $Paths @{GuidedSelection=$true})}}
 }
 function Invoke-FindBestFlow {
  param($Paths);$task=Read-TaskChoice
@@ -103,7 +128,7 @@ function Invoke-FindBestFlow {
  if((Read-Host 'Run the automatic comparison? [Y/n]')-notmatch'^(n|no)$'){
    $benchmarkTask=Get-BenchmarkTaskForUseCase $task
    if($null-eq$benchmarkTask){Write-Host 'Automated vision comparison is not available yet because the repeatable suite has no image fixture. The recommendation above remains provisional.' -ForegroundColor Yellow}
-   else{[void](Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' @{AutoSelect=$true;Runs=1;Warmup=0;Tasks=@($benchmarkTask);ContextLength=@(2048)})}
+   else{[void](Invoke-AILabBenchmark $Paths @{AutoSelect=$true;Runs=1;Warmup=0;Tasks=@($benchmarkTask);ContextLength=@(2048)})}
  }
 }
 function Invoke-DiscoveryFlow {
@@ -147,8 +172,8 @@ function Show-AdvancedMenu {
  do{
   $items=@([pscustomobject]@{Key='1';Label='Benchmark installed models - quick guided'},[pscustomobject]@{Key='2';Label='Benchmark installed models - comprehensive guided'},[pscustomobject]@{Key='3';Label='List installed models'},[pscustomobject]@{Key='4';Label='Back up AI Lab data'},[pscustomobject]@{Key='5';Label='Run non-destructive repair'},[pscustomobject]@{Key='6';Label='Back'});Write-Menu 'Advanced tools' $items
   switch(Read-Host 'Choose'){
-   '1'{[void](Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' @{Quick=$true;GuidedSelection=$true});Pause-ControlCenter}
-   '2'{[void](Invoke-AILabChildScript $Paths 'Benchmark-AI-Lab.ps1' @{GuidedSelection=$true});Pause-ControlCenter}
+   '1'{[void](Invoke-AILabBenchmark $Paths @{Quick=$true;GuidedSelection=$true});Pause-ControlCenter}
+   '2'{[void](Invoke-AILabBenchmark $Paths @{GuidedSelection=$true});Pause-ControlCenter}
    '3'{[void](Invoke-AILabChildScript $Paths 'Manage-Models.ps1' @{Action='list'});Pause-ControlCenter}
    '4'{[void](Invoke-AILabChildScript $Paths 'Backup-AI-Lab.ps1' @{BackupDir=(Join-Path $Paths.LabRoot 'backups')});Pause-ControlCenter}
    '5'{[void](Invoke-AILabChildScript $Paths 'Repair-AI-Lab.ps1');Pause-ControlCenter}

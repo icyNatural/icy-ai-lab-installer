@@ -49,6 +49,22 @@ Describe 'AI Lab Control Center' {
   (Get-BenchmarkTaskForUseCase tools)|Should Be 'ToolUse'
   (Get-BenchmarkTaskForUseCase vision)|Should Be $null
  }
+ It 'classifies completed partial postponed and actual-error benchmark outcomes' {
+  $postponed=Join-Path $TestDrive 'postponed.json';@{Cancelled=$false;Runs=@();SkippedModels=@(@{Model='small';Reason='Only 0.5 GB RAM is available; this benchmark needs about 2.5 GB.'});Failures=@()}|ConvertTo-Json -Depth 5|Set-Content $postponed
+  $partial=Join-Path $TestDrive 'partial.json';@{Cancelled=$false;Runs=@(@{Model='a'});SkippedModels=@(@{Model='b';Reason='low RAM'});Failures=@()}|ConvertTo-Json -Depth 5|Set-Content $partial
+  $complete=Join-Path $TestDrive 'complete.json';@{Cancelled=$false;Runs=@(@{Model='a'});SkippedModels=@();Failures=@()}|ConvertTo-Json -Depth 5|Set-Content $complete
+  $error=Join-Path $TestDrive 'error.json';@{Cancelled=$false;Runs=@();SkippedModels=@();Failures=@(@{Error='binding failed'})}|ConvertTo-Json -Depth 5|Set-Content $error
+  (Get-BenchmarkOutcome 10 $postponed).Status|Should Be 'Postponed';(Get-BenchmarkOutcome 10 $postponed).Message|Should Match 'Only 0.5 GB RAM.*needs about 2.5 GB'
+  (Get-BenchmarkOutcome 20 $partial).Status|Should Be 'Partial'
+  (Get-BenchmarkOutcome 0 $complete).Status|Should Be 'Completed'
+  (Get-BenchmarkOutcome 2 $error).Status|Should Be 'Error';(Get-BenchmarkOutcome 2 $error).Message|Should Match 'binding failed'
+ }
+ It 'suppresses raw benchmark exit-code messaging in favor of report-backed outcomes' {
+  $source=Get-Content $scriptPath -Raw
+  $source|Should Match 'Invoke-AILabChildScript \$Paths ''Benchmark-AI-Lab\.ps1'' \$Parameters -SuppressExitMessage'
+  $source|Should Match 'if\(\$code-ne 0-and-not\$SuppressExitMessage\)'
+  $source|Should Match '\|Out-Host;\$code=\[int\]\$LASTEXITCODE'
+ }
  It 'never invokes or references the installer from either launcher or control center' {
   ((Get-Content $scriptPath -Raw)+(Get-Content $cmdPath -Raw))|Should Not Match '(?i)Install-AI-Lab|START-HERE|reinstall'
  }

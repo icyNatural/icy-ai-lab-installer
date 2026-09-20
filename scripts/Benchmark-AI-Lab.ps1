@@ -9,7 +9,7 @@ param(
  [ValidateRange(1,3600)][int]$TimeoutSec=300,[ValidateRange(1,3600)][int]$KeepAliveSec=300,
  [switch]$Quick,[switch]$AllModels,[switch]$AutoSelect,[switch]$GuidedSelection,
  [ValidateRange(1,20)][int]$AutoSelectCount=3,
- [switch]$LibraryMode
+ [switch]$PassThru,[switch]$LibraryMode
 )
 $ErrorActionPreference='Stop'; Set-StrictMode -Version Latest
 
@@ -92,10 +92,11 @@ function Get-ResourceAvailability {
 function Test-ModelResourceGate {
  param([double]$ModelSizeBytes,$Resources)
   # Quantized weights need runtime/context overhead. Unknown measurements fail closed.
- $required=[math]::Ceiling([math]::Max(1,$ModelSizeBytes)*1.25)
+  $required=[math]::Ceiling([math]::Max([double]1.0,[double]$ModelSizeBytes)*1.25)
  $ram=Get-PropertyValue $Resources AvailableRamBytes;$disk=Get-PropertyValue $Resources AvailableStorageBytes
   $minimumReportDisk=10MB;$known=($null-ne $ram-and $null-ne $disk);$ok=$known-and $ram-ge $required-and $disk-ge $minimumReportDisk
-  [pscustomobject]@{Allowed=$ok;RequiredBytes=$required;RequiredReportDiskBytes=$minimumReportDisk;AvailableRamBytes=$ram;AvailableStorageBytes=$disk;Reason=$(if($ok){'Available'}elseif(-not$known){'RAM or storage availability could not be verified; postponed without loading'}elseif($ram-lt$required){'Insufficient available RAM; postponed without loading'}else{'Insufficient disk space to write benchmark reports; postponed without loading'})}
+  $requiredGB=[math]::Round($required/1GB,2);$availableGB=if($null-ne$ram){[math]::Round([double]$ram/1GB,2)}else{$null}
+  [pscustomobject]@{Allowed=$ok;RequiredBytes=$required;RequiredRamGB=$requiredGB;RequiredReportDiskBytes=$minimumReportDisk;AvailableRamBytes=$ram;AvailableRamGB=$availableGB;AvailableStorageBytes=$disk;Reason=$(if($ok){'Available'}elseif(-not$known){'RAM or storage availability could not be verified. The test was safely postponed.'}elseif($ram-lt$required){"Only $availableGB GB RAM is available; this benchmark needs about $requiredGB GB. The test was safely postponed. Close memory-heavy apps and try again."}else{'There is not enough disk space to write benchmark reports. The test was safely postponed.'})}
 }
 function Format-MetricValue {param($Value,[int]$Digits=2);if($null-eq $Value){return '-'};([math]::Round([double]$Value,$Digits)).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)}
 function Format-CompactResult {
@@ -117,6 +118,10 @@ function Get-BenchmarkInsights {
 }
 function Remove-PrivateText {param([string]$Text);if($null-eq $Text){return ''};foreach($private in @($env:USERPROFILE,$env:USERNAME,$env:COMPUTERNAME)|Where-Object{$_}){$Text=$Text-replace ('(?i)'+[regex]::Escape([string]$private)),'[redacted]'};$Text=$Text-replace '(?i)\b(password|secret|token|credential|api[_ -]?key)\s*[:=]\s*\S+','$1=[redacted]';$Text=$Text-replace '(?i)(?:[A-Z]:\\|\\\\)[^\r\n|]+','[private path]';$Text}
 function ConvertTo-SafeReportCell {param($Value);(Remove-PrivateText ([string]$Value))-replace '\|','/' -replace '[\r\n]+',' '}
+function Get-BenchmarkExitCode {
+ param([bool]$Cancelled,[bool]$SetupFailed,[int]$RunCount,[int]$SkippedCount,[int]$FailureCount)
+ if($Cancelled){return 130};if($SetupFailed-or($RunCount-eq0-and$SkippedCount-eq0)){return 2};if($RunCount-eq0-and$SkippedCount-gt0-and$FailureCount-eq0){return 10};if($FailureCount-gt0-or$SkippedCount-gt0){return 20};0
+}
 
 function Invoke-OllamaStream {
  param([string]$Uri,[hashtable]$Body,[int]$Timeout=300);$Body.stream=$true
@@ -163,5 +168,5 @@ finally{
  $jsonPath=Join-Path $logDir "benchmark_$stamp.json";$csvPath=Join-Path $logDir "benchmark_$stamp-runs.csv";$mdPath=Join-Path $logDir "benchmark_$stamp.md";$textPath=Join-Path $logDir "benchmark_$stamp.txt";$share=New-ShareReportContent $summary $insights $timestamp $skipped $failures
  $report=[ordered]@{SchemaVersion='1.0';ReportType='IcyAILabBenchmark';Timestamp=$timestamp;Cancelled=$cancelled;Hardware=Get-BenchmarkHardware;OllamaVersion=Get-PropertyValue $version version;Configuration=[ordered]@{Runs=$Runs;Warmup=$Warmup;Tasks=$Tasks;ContextLengths=$ContextLength;KeepAliveSeconds=$KeepAliveSec;Streaming=$true;Sequential=$true};InitialResidentModels=$initialNames;SkippedModels=$skipped;Failures=$failures;Insights=$insights;Summary=$summary;Runs=$allRuns;Files=[ordered]@{Json=$jsonPath;Csv=$csvPath;Markdown=$mdPath;Text=$textPath}}
  $json=$report|ConvertTo-Json -Depth 8;Set-Content $jsonPath $json -Encoding UTF8;if($allRuns.Count){$allRuns|Export-Csv $csvPath -NoTypeInformation -Encoding UTF8}else{Set-Content $csvPath 'Model,Task,ContextLength,Run,Temperature,TTFTSeconds,LoadSeconds,GenerationTokensPerSecond,Correct' -Encoding UTF8};Set-Content $mdPath $share.Markdown -Encoding UTF8;Set-Content $textPath $share.Text -Encoding UTF8
- if($JsonOutput){$json}else{Write-Log "JSON: $jsonPath" SUCCESS;Write-Log "CSV: $csvPath" SUCCESS;Write-Log "Markdown: $mdPath" SUCCESS;Write-Log "Shareable text: $textPath" SUCCESS;$report};if($cancelled){exit 130};if($setupFailed-or !$allRuns.Count){exit 2}
+ if($JsonOutput){$json}else{Write-Log "JSON report: $jsonPath";Write-Log "CSV report: $csvPath";Write-Log "Markdown report: $mdPath";Write-Log "Shareable text: $textPath";if($PassThru){$report}};$exitCode=Get-BenchmarkExitCode $cancelled $setupFailed @($allRuns).Count @($skipped).Count @($failures).Count;if($exitCode-ne0){exit $exitCode}
 }

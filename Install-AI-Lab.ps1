@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Icy AI Lab Production-Quality Portable Windows Bootstrapper (v2.1.0)
+    Icy AI Lab Production-Quality Portable Windows Bootstrapper (v2.3.0)
 .DESCRIPTION
     Enterprise-grade installer and management suite for a local AI workstation.
     Automates hardware diagnostics, WSL 2 enablement with reboot-resume state machine,
@@ -13,6 +13,7 @@
 param(
     [string]$InstallRoot = (Join-Path $env:USERPROFILE "AI-Lab"),
     [string]$ModelPack = "",
+    [switch]$LightweightMode,
     [switch]$SkipReboot,
     [switch]$SkipModels,
     [switch]$NonInteractive,
@@ -23,8 +24,12 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ($LightweightMode -and -not [string]::IsNullOrWhiteSpace($ModelPack)) {
+    throw "Choose either -LightweightMode or -ModelPack, not both."
+}
+
 # Global Constants & Exit Codes
-$script:INSTALLER_VERSION     = "2.1.0"
+$script:INSTALLER_VERSION     = "2.3.0"
 $script:STATE_SCHEMA_VERSION  = "1.0"
 
 $script:EXIT_SUCCESS          = 0
@@ -86,7 +91,7 @@ function Stage-InstallerSource {
     }
 
     # Copy core script, config, and directories
-    $itemsToStage = @("Install-AI-Lab.ps1", "config.json", "docker", "scripts")
+    $itemsToStage = @("Install-AI-Lab.ps1", "AI-LAB.cmd", "config.json", "model-catalog.json", "docker", "scripts")
     foreach ($item in $itemsToStage) {
         $itemPath = Join-Path $sourceDir $item
         if (Test-Path -Path $itemPath) {
@@ -126,6 +131,7 @@ if (-not (Test-IsAdmin)) {
     # Build escaped argument string using -NoExit
     $argList = "-NoExit -NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$targetScriptToRun`" -InstallRoot `"$InstallRoot`""
     if (-not [string]::IsNullOrWhiteSpace($ModelPack)) { $argList += " -ModelPack `"$ModelPack`"" }
+    if ($LightweightMode)   { $argList += " -LightweightMode" }
     if ($SkipReboot)        { $argList += " -SkipReboot" }
     if ($SkipModels)        { $argList += " -SkipModels" }
     if ($NonInteractive)     { $argList += " -NonInteractive" }
@@ -220,6 +226,7 @@ try {
             workingDirectory  = $scriptWorkingDir
             installRoot       = $InstallRoot
             selectedModelPack = $ModelPack
+            lightweightMode   = [bool]$LightweightMode
             currentPhase      = $Phase
             rebootCount       = $RebootCount
             createdAt         = $createdAt
@@ -246,7 +253,14 @@ try {
             $wshell = New-Object -ComObject WScript.Shell
             $shortcut = $wshell.CreateShortcut($shortcutPath)
             $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$ScriptPath`" -ResumedFromReboot -InstallRoot `"$InstallRoot`""
+            $recoveryArgs = "-NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$ScriptPath`" -ResumedFromReboot -InstallRoot `"$InstallRoot`""
+            if (-not [string]::IsNullOrWhiteSpace($ModelPack)) { $recoveryArgs += " -ModelPack `"$ModelPack`"" }
+            if ($LightweightMode) { $recoveryArgs += " -LightweightMode" }
+            if ($SkipReboot) { $recoveryArgs += " -SkipReboot" }
+            if ($SkipModels) { $recoveryArgs += " -SkipModels" }
+            if ($NonInteractive) { $recoveryArgs += " -NonInteractive" }
+            if ($Force) { $recoveryArgs += " -Force" }
+            $shortcut.Arguments = $recoveryArgs
             $shortcut.WorkingDirectory = Split-Path -Parent $ScriptPath
             $shortcut.Description = "Resume Icy AI Lab Installation"
             $shortcut.Save()
@@ -402,6 +416,7 @@ try {
         # Register RunOnce against staged script
         $resumeCmd = "powershell.exe -NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$stagedScriptPath`" -ResumedFromReboot -InstallRoot `"$InstallRoot`""
         if (-not [string]::IsNullOrWhiteSpace($ModelPack)) { $resumeCmd += " -ModelPack `"$ModelPack`"" }
+        if ($LightweightMode) { $resumeCmd += " -LightweightMode" }
         if ($SkipModels)     { $resumeCmd += " -SkipModels" }
         if ($NonInteractive) { $resumeCmd += " -NonInteractive" }
         if ($Force)          { $resumeCmd += " -Force" }
@@ -523,8 +538,21 @@ try {
         $SourceScripts = Join-Path $PSScriptRoot "scripts"
     }
     if (Test-Path -Path $SourceScripts) {
-        Copy-Item -Path "$SourceScripts\*" -Destination (Join-Path $InstallRoot "scripts") -Force -Recurse
+        $targetScripts = Join-Path $InstallRoot "scripts"
+        if (-not (Test-Path -Path $targetScripts)) { New-Item -ItemType Directory -Path $targetScripts -Force | Out-Null }
+        Copy-Item -Path "$SourceScripts\*" -Destination $targetScripts -Force -Recurse
         Write-Log "Management scripts deployed to '$InstallRoot\scripts'." "SUCCESS"
+    }
+    foreach ($dataFile in @("config.json", "model-catalog.json")) {
+        $sourceDataFile = Join-Path $script:StagingDir $dataFile
+        if (-not (Test-Path -Path $sourceDataFile)) { $sourceDataFile = Join-Path $PSScriptRoot $dataFile }
+        if (Test-Path -Path $sourceDataFile) { Copy-Item -Path $sourceDataFile -Destination (Join-Path $InstallRoot $dataFile) -Force }
+    }
+    $sourceControlLauncher = Join-Path $script:StagingDir "AI-LAB.cmd"
+    if (-not (Test-Path -Path $sourceControlLauncher)) { $sourceControlLauncher = Join-Path $PSScriptRoot "AI-LAB.cmd" }
+    if (Test-Path -Path $sourceControlLauncher) {
+        Copy-Item -Path $sourceControlLauncher -Destination (Join-Path $InstallRoot "AI-LAB.cmd") -Force
+        Write-Log "AI Lab Control Center deployed to '$InstallRoot\AI-LAB.cmd'." "SUCCESS"
     }
 
     # =========================================================================
@@ -635,50 +663,74 @@ volumes:
 
     if (-not $SkipModels) {
         $ConfigFile = Join-Path $script:StagingDir "config.json"
-        if (-not (Test-Path -Path $ConfigFile)) {
-            $ConfigFile = Join-Path $InstallRoot "config.json"
-        }
-
+        if (-not (Test-Path -Path $ConfigFile)) { $ConfigFile = Join-Path $InstallRoot "config.json" }
         $config = $null
         if (Test-Path -Path $ConfigFile) {
+            try { $config = Get-Content -Path $ConfigFile -Raw | ConvertFrom-Json }
+            catch { Write-Log "Could not read model configuration; built-in pack defaults remain available." "WARN" }
+        }
+
+        # Lightweight Mode is opt-in. In unattended runs it is recommendation-only.
+        if (-not $LightweightMode -and -not $NonInteractive -and [string]::IsNullOrWhiteSpace($ModelPack)) {
+            if ((Read-Host "Use optional Lightweight Mode for task-based small-model recommendations? [y/N]") -match '^[Yy]') { $LightweightMode = $true }
+        }
+
+        $selectedModels = @()
+        if ($LightweightMode) {
+            Write-Log "Lightweight Mode enabled; running a quick, non-benchmark hardware assessment."
+            if ($NonInteractive) { Write-Log "NonInteractive Lightweight Mode reports recommendations only; no adaptive model is downloaded." "SUCCESS" }
             try {
-                $config = Get-Content -Path $ConfigFile -Raw | ConvertFrom-Json
-            } catch { }
+                $adaptiveModule = Join-Path $InstallRoot "scripts\Adaptive-AI-Lab.psm1"
+                if (-not (Test-Path $adaptiveModule)) { $adaptiveModule = Join-Path $SourceScripts "Adaptive-AI-Lab.psm1" }
+                $catalogPath = Join-Path $InstallRoot "model-catalog.json"
+                if (-not (Test-Path $catalogPath)) { $catalogPath = Join-Path $script:StagingDir "model-catalog.json" }
+                Import-Module $adaptiveModule -Force -ErrorAction Stop
+                $hardware = Get-AIHardwareProfile
+                $catalog = Import-AIModelCatalog -Path $catalogPath
+                $validTasks = @("general", "coding", "reasoning", "vision", "embedding", "tools")
+                if ($NonInteractive) { $chosenTasks = if ($config -and $config.lightweightMode.defaultTasks) { @($config.lightweightMode.defaultTasks) } else { @("general") } }
+                else {
+                    Write-Host "Tasks: general, coding, reasoning, vision, embedding, tools" -ForegroundColor Yellow
+                    $taskInput = Read-Host "Choose comma-separated tasks [general]"
+                    if ([string]::IsNullOrWhiteSpace($taskInput)) { $chosenTasks = @("general") } else { $chosenTasks = @($taskInput -split ',' | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $validTasks -contains $_ } | Select-Object -Unique) }
+                    if ($chosenTasks.Count -eq 0) { throw "No valid task was selected." }
+                }
+                foreach ($task in $chosenTasks) {
+                    $recommendation = Get-AIModelRecommendation -Catalog $catalog -Hardware $hardware -Task $task
+                    $candidate = $recommendation.Recommended
+                    if (-not $candidate) { Write-Log "No catalog recommendation exists for task '$task'." "WARN"; continue }
+                    Write-Log "Recommended for ${task}: $($candidate.Tag) (compatible: $($candidate.Compatible)). $($recommendation.Basis)"
+                    if (-not $NonInteractive -and (Read-Host "Pull '$($candidate.Tag)' for '$task'? [y/N]") -match '^[Yy]') {
+                        if (-not $candidate.Compatible) { Write-Log "Compatibility checks rejected '$($candidate.Tag)'." "WARN"; continue }
+                        $catalogModel = @($catalog.models | Where-Object { $_.tag -eq $candidate.Tag } | Select-Object -First 1)
+                        $storage = if ($catalogModel.Count) { Test-AIModelCompatibility -Model $catalogModel[0] -Hardware $hardware } else { $null }
+                        $storageOK = ($null -ne $storage -and [bool]$storage.Compatible)
+                        if ($storageOK) { $selectedModels += $candidate.Tag } else { Write-Log "Storage check rejected '$($candidate.Tag)'." "WARN" }
+                    }
+                }
+                $selectedModels = @($selectedModels | Select-Object -Unique)
+            } catch { Write-Log "Lightweight assessment was unavailable and was skipped safely: $_" "WARN"; $selectedModels = @() }
+        } else {
+            # Preserve original model-pack selection and downloads.
+            $selectedPackKey = "balanced"
+            if (-not [string]::IsNullOrWhiteSpace($ModelPack)) { $selectedPackKey = $ModelPack.ToLower() } elseif ($SysInfo.TotalRAM_GB -lt 12) { $selectedPackKey = "light" }
+            Write-Log "Selected Model Pack: '$selectedPackKey'" "SUCCESS"
+            if ($config -and $config.modelPacks -and $config.modelPacks.$selectedPackKey) {
+                $packObj = $config.modelPacks.$selectedPackKey
+                Write-Log "Pack Name: $($packObj.name)"
+                Write-Log "Est. Disk: $($packObj.estimatedDiskGB) GB | Available Free Disk: $($SysInfo.FreeDisk_GB) GB"
+                if ($SysInfo.FreeDisk_GB -ge $packObj.estimatedDiskGB) { $selectedModels = @($packObj.models) }
+                else { Write-Log "Free disk space is lower than estimated pack size; pulling default starter models." "WARN"; $selectedModels = @("qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text") }
+            } else { $selectedModels = @("qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text") }
         }
 
-        # Model pack selection: Default to balanced unless RAM < 12GB (light) or explicitly specified
-        $selectedPackKey = "balanced"
-        if (-not [string]::IsNullOrWhiteSpace($ModelPack)) {
-            $selectedPackKey = $ModelPack.ToLower()
-        } elseif ($SysInfo.TotalRAM_GB -lt 12) {
-            $selectedPackKey = "light"
-        }
-
-        Write-Log "Selected Model Pack: '$selectedPackKey'" "SUCCESS"
-
-        if (Get-Command "ollama" -ErrorAction SilentlyContinue) {
+        if ($selectedModels.Count -gt 0 -and (Get-Command "ollama" -ErrorAction SilentlyContinue)) {
             try {
                 ollama list *> $null
             } catch {
                 Write-Log "Launching Ollama background process..."
                 Start-Process -FilePath "ollama" -ArgumentList "serve" -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 5
-            }
-
-            $selectedModels = @()
-            if ($config -and $config.modelPacks -and $config.modelPacks.$selectedPackKey) {
-                $packObj = $config.modelPacks.$selectedPackKey
-                Write-Log "Pack Name: $($packObj.name)"
-                Write-Log "Est. Disk: $($packObj.estimatedDiskGB) GB | Available Free Disk: $($SysInfo.FreeDisk_GB) GB"
-
-                if ($SysInfo.FreeDisk_GB -ge $packObj.estimatedDiskGB) {
-                    $selectedModels = $packObj.models
-                } else {
-                    Write-Log "Free disk space is lower than estimated pack size; pulling default starter models." "WARN"
-                    $selectedModels = @("qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text")
-                }
-            } else {
-                $selectedModels = @("qwen3.5:4b", "gemma3:4b", "llama3.2:3b", "nomic-embed-text")
             }
 
             # Check existing models to avoid duplicate downloads
@@ -707,9 +759,13 @@ volumes:
             if ($failedModels.Count -gt 0) {
                 Write-Log "Model pull incomplete for: $($failedModels -join ', '). Retry later via Manage-Models.ps1." "WARN"
             }
-        } else {
+        } elseif ($selectedModels.Count -gt 0) {
             Write-Log "Ollama service not available in PATH yet; skipping model pulls." "WARN"
+        } else {
+            Write-Log "No models were explicitly approved for download; continuing without model pulls." "SUCCESS"
         }
+    } else {
+        Write-Log "SkipModels specified; all model assessment and downloads skipped." "SUCCESS"
     }
 
     # =========================================================================
@@ -721,6 +777,13 @@ volumes:
     try {
         $desktopPath = [Environment]::GetFolderPath("Desktop")
         $wshell = New-Object -ComObject WScript.Shell
+
+        # Beginner-friendly Control Center Shortcut
+        $controlLnk = $wshell.CreateShortcut((Join-Path $desktopPath "Icy AI Lab Control Center.lnk"))
+        $controlLnk.TargetPath = (Join-Path $InstallRoot "AI-LAB.cmd")
+        $controlLnk.WorkingDirectory = $InstallRoot
+        $controlLnk.Description = "Analyze hardware, find models, benchmark, and manage Icy AI Lab"
+        $controlLnk.Save()
 
         # Start Shortcut
         $startLnk = $wshell.CreateShortcut((Join-Path $desktopPath "Start AI Lab.lnk"))

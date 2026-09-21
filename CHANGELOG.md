@@ -2,6 +2,32 @@
 
 All notable changes to the **Icy AI Lab Installer** project will be documented in this file.
 
+## [2.3.0] - One-Click Control Center and Guided Benchmarking
+
+### Added
+- `AI-LAB.cmd` beginner control center for hardware analysis, model discovery, recommendations, services, reports, and advanced tools without rerunning installation.
+- Guided single-, selected-, compatible-, and automatic small-model comparisons using only installed completion models.
+- Compact benchmark output plus privacy-safe Markdown and text summaries alongside detailed JSON and CSV reports.
+- Evidence-based performance, correctness, cold/warm, task, and memory-residency insights.
+
+### Safety and compatibility
+- Benchmarks run sequentially, fail closed when resource availability cannot be verified, continue safely after individual model failures, and never download models.
+- Models already resident before a benchmark are not unloaded; cleanup is limited to benchmark-owned model loads.
+- Existing installer launchers, single-model benchmark commands, Lightweight Mode, model catalog, profiler, and management scripts remain available.
+
+## [2.2.0] - Optional Adaptive Lightweight Mode
+
+### Added
+- Opt-in installer `-LightweightMode` with opportunistic quick hardware/storage assessment, task selection, and separate approval for every recommended model.
+- `Manage-Models.ps1` `catalog`, `assess`, and task-aware `recommend` actions, plus fail-closed catalog/hardware/storage checks for explicit `pull` requests.
+- Adaptive catalog/module staging and deployment, configuration defaults, compatibility tests, and a real-hardware telemetry example.
+
+### Safety and compatibility
+- `-NonInteractive -LightweightMode` is recommendation-only and never downloads adaptive models; `-SkipModels` takes precedence over all model assessment/download behavior.
+- Preserved original `light`, `balanced`, and `coding` model packs and existing `-ModelPack` selection behavior.
+- Recommendations never auto-remove models and do not claim benchmark or throughput results.
+- Preserved UAC, reboot-resume, Docker, launcher, backup, restore, and repair workflows with Windows PowerShell 5.1/Pester 3.4 compatibility.
+
 ## [2.1.0] - 2.1.0 End-to-End Resilience & Model Profiling/Benchmarking Layer
 
 ### Added

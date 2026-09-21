@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Pester Automated Test Suite for Icy AI Lab Installer (v2.1.0)
+    Pester Automated Test Suite for Icy AI Lab Installer (v2.3.0)
 #>
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -21,7 +21,8 @@ Describe "Icy AI Lab Installer Core Tests" {
         It "config.json physically exists and parses valid JSON" {
             (Test-Path -Path $configFile) | Should Be $true
             $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
-            $config.installerVersion | Should Be "2.1.0"
+            $config.installerVersion | Should Be "2.3.0"
+            @($config.lightweightMode.defaultTasks).Count | Should BeGreaterThan 0
             $config.modelPacks.light | Should Not BeNullOrEmpty
             $config.modelPacks.balanced | Should Not BeNullOrEmpty
             $config.modelPacks.coding | Should Not BeNullOrEmpty
@@ -41,6 +42,14 @@ Describe "Icy AI Lab Installer Core Tests" {
 
         It "Benchmark-AI-Lab.ps1 benchmarking module physically exists" {
             (Test-Path -Path $benchmarkScript) | Should Be $true
+        }
+
+        It "ships and deploys the one-click control center without replacing START-HERE" {
+            (Test-Path -Path (Join-Path $repoRoot 'AI-LAB.cmd')) | Should Be $true
+            (Test-Path -Path (Join-Path $repoRoot 'scripts\AI-Lab-ControlCenter.ps1')) | Should Be $true
+            $raw = Get-Content -Path $installScript -Raw
+            $raw | Should Match 'AI-LAB\.cmd'
+            $raw | Should Match 'Icy AI Lab Control Center\.lnk'
         }
     }
 
@@ -88,7 +97,7 @@ Describe "Icy AI Lab Installer Core Tests" {
             try {
                 $sampleState = [ordered]@{
                     schemaVersion     = "1.0"
-                    installerVersion  = "2.1.0"
+                    installerVersion  = "2.2.0"
                     scriptPath        = "C:\Staged\Install-AI-Lab.ps1"
                     currentPhase      = "VerifyWSL"
                     rebootCount       = 1
@@ -97,7 +106,7 @@ Describe "Icy AI Lab Installer Core Tests" {
                 (Test-Path -Path $tempStatePath) | Should Be $true
 
                 $readObj = Get-Content -Path $tempStatePath -Raw | ConvertFrom-Json
-                $readObj.installerVersion | Should Be "2.1.0"
+                $readObj.installerVersion | Should Be "2.2.0"
                 $readObj.currentPhase | Should Be "VerifyWSL"
                 $readObj.rebootCount | Should Be 1
             }
@@ -109,6 +118,49 @@ Describe "Icy AI Lab Installer Core Tests" {
         It "Flags reboot count threshold when rebootCount >= 2" {
             $rebootCount = 2
             ($rebootCount -ge 2) | Should Be $true
+        }
+    }
+
+    Context "Lightweight Mode Installer Compatibility" {
+        It "declares and propagates the LightweightMode switch" {
+            $raw = Get-Content -Path $installScript -Raw
+            $raw | Should Match '\[switch\]\$LightweightMode'
+            $raw | Should Match '\$argList \+= " -LightweightMode"'
+            $raw | Should Match '\$resumeCmd \+= " -LightweightMode"'
+            $raw | Should Match '\$recoveryArgs \+= " -LightweightMode"'
+            $raw | Should Match 'Choose either -LightweightMode or -ModelPack'
+        }
+
+        It "keeps SkipModels outside all adaptive assessment and pull work" {
+            $raw = Get-Content -Path $installScript -Raw
+            $skipStart = $raw.IndexOf('if (-not $SkipModels)')
+            $adaptiveStart = $raw.IndexOf('if ($LightweightMode)', $skipStart)
+            $skipEnd = $raw.IndexOf('SkipModels specified; all model assessment and downloads skipped.', $adaptiveStart)
+            ($skipStart -ge 0) | Should Be $true
+            ($adaptiveStart -gt $skipStart) | Should Be $true
+            ($skipEnd -gt $adaptiveStart) | Should Be $true
+        }
+
+        It "guards adaptive download approval from NonInteractive mode" {
+            $raw = Get-Content -Path $installScript -Raw
+            $raw | Should Match 'if \(-not \$NonInteractive -and \(Read-Host.*Pull'
+            $raw | Should Match 'NonInteractive Lightweight Mode reports recommendations only'
+        }
+
+        It "preserves all original model packs" {
+            $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
+            @($config.modelPacks.light.models).Count | Should BeGreaterThan 0
+            @($config.modelPacks.balanced.models).Count | Should BeGreaterThan 0
+            @($config.modelPacks.coding.models).Count | Should BeGreaterThan 0
+        }
+
+        It "model manager exposes read-only adaptive actions and explicit removal only" {
+            $manager = Get-Content -Path (Join-Path $repoRoot 'scripts\Manage-Models.ps1') -Raw
+            $manager | Should Match '"catalog"'
+            $manager | Should Match '"assess"'
+            $manager | Should Match '"recommend"'
+            $manager | Should Match 'Test-SafeAdaptivePull'
+            $manager | Should Match '"remove"[\s\S]*if \(-not \$PackOrModel\)[\s\S]*ollama rm \$PackOrModel'
         }
     }
 
